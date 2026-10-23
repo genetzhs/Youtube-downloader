@@ -66,7 +66,7 @@ pub(crate) fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-pub(crate) fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, UpdateError> {
+fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, UpdateError> {
     Ok(agent
         .get(url)
         .header("User-Agent", USER_AGENT)
