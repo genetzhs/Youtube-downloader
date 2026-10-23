@@ -25,7 +25,7 @@ fn galley(
 /// A pill-shaped choice, e.g. `1080p` or `MP3`.
 pub fn chip(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let p = palette(ui.ctx());
-    let fg = if selected { p.chip_selected_fg } else { p.text };
+    let fg = if selected { p.on_accent } else { p.text };
     let text = galley(ui, label, 13.0, Weight::Medium, fg);
     let size = vec2(text.size().x + 28.0, 36.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -33,7 +33,13 @@ pub fn chip(ui: &mut Ui, label: &str, selected: bool) -> Response {
     if ui.is_rect_visible(rect) {
         let r = CornerRadius::same(radius::CONTROL);
         if selected {
-            ui.painter().rect_filled(rect, r, p.chip_selected_bg);
+            // Same color as the Download button, so every choice reads as one system.
+            let fill = if resp.hovered() {
+                p.accent_hover
+            } else {
+                p.accent
+            };
+            ui.painter().rect_filled(rect, r, fill);
         } else {
             let fill = if resp.hovered() {
                 p.surface_hover
@@ -86,7 +92,7 @@ pub fn segmented<T: PartialEq + Copy>(
     let labels: Vec<_> = options
         .iter()
         .map(|(v, _, l)| {
-            let color = if v == value { p.text } else { p.muted };
+            let color = if v == value { p.on_accent } else { p.muted };
             galley(ui, l, 13.0, Weight::SemiBold, color)
         })
         .collect();
@@ -117,12 +123,12 @@ pub fn segmented<T: PartialEq + Copy>(
                 r,
                 Color32::from_black_alpha(18),
             );
-            ui.painter().rect_filled(rect, r, p.segment_selected);
+            ui.painter().rect_filled(rect, r, p.accent);
         } else if resp.hovered() {
             ui.painter()
                 .rect_filled(rect, CornerRadius::same(9), p.surface_hover);
         }
-        let color = if selected { p.text } else { p.muted };
+        let color = if selected { p.on_accent } else { p.muted };
         let content_w = 15.0 + 8.0 + text.size().x;
         let left = rect.center().x - content_w / 2.0;
         icons::paint(
@@ -406,8 +412,10 @@ pub fn link_field(ui: &mut Ui, text: &mut String, paste_hint: &str) -> LinkField
                     .font(font(16.0, Weight::Regular))
                     .text_color(p.text)
                     .hint_text(
-                        egui::RichText::new("Paste a YouTube or any yt-dlp supported link…")
-                            .color(p.faint),
+                        egui::RichText::new(
+                            "Paste one or more links (YouTube or any yt-dlp site)…",
+                        )
+                        .color(p.faint),
                     )
                     .desired_width(field_w)
                     .vertical_align(egui::Align::Center)

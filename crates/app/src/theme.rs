@@ -23,11 +23,7 @@ pub struct Palette {
     pub accent: Color32,
     pub accent_hover: Color32,
     pub on_accent: Color32,
-    /// Selected chips are the inverse of the page: light on dark, dark on light.
-    pub chip_selected_bg: Color32,
-    pub chip_selected_fg: Color32,
     pub segment_bg: Color32,
-    pub segment_selected: Color32,
     pub selected_border: Color32,
     pub selected_glow: Color32,
     pub track: Color32,
@@ -57,10 +53,7 @@ pub const DARK: Palette = Palette {
     accent: hex(0x3B4BF5),
     accent_hover: hex(0x4F5DF7),
     on_accent: hex(0xFFFFFF),
-    chip_selected_bg: hex(0xEDEDEF),
-    chip_selected_fg: hex(0x111113),
     segment_bg: hex(0x1F1F23),
-    segment_selected: hex(0x2E2E34),
     selected_border: hex(0x3A44B8),
     selected_glow: Color32::from_rgba_premultiplied(13, 17, 55, 56),
     track: hex(0x26262B),
@@ -86,10 +79,7 @@ pub const LIGHT: Palette = Palette {
     accent: hex(0x3B4BF5),
     accent_hover: hex(0x2F3EE0),
     on_accent: hex(0xFFFFFF),
-    chip_selected_bg: hex(0x18181B),
-    chip_selected_fg: hex(0xFFFFFF),
     segment_bg: hex(0xEAE8E2),
-    segment_selected: hex(0xFFFFFF),
     selected_border: hex(0xD9DCFF),
     selected_glow: hex(0xEEF0FF),
     track: hex(0xECEAE4),
@@ -294,12 +284,12 @@ mod tests {
                     assert!(c >= 4.5, "{fg:?} on {bg:?} is only {c:.2}:1");
                 }
             }
+            // Selected chips, the Audio/Video switch and buttons all use the accent.
             assert!(contrast(p.on_accent, p.accent) >= 4.5);
-            assert!(contrast(p.chip_selected_fg, p.chip_selected_bg) >= 4.5);
+            assert!(contrast(p.on_accent, p.accent_hover) >= 4.5);
             assert!(contrast(p.success, p.success_bg) >= 4.5);
             assert!(contrast(p.warn_text, p.warn_bg) >= 4.5);
             assert!(contrast(p.danger, p.surface) >= 4.5);
-            assert!(contrast(p.text, p.segment_selected) >= 4.5);
         }
     }
 }
