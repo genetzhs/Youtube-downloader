@@ -1,0 +1,47 @@
+[package]
+name = "youtube-downloader"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+directories = "6.0.0"
+eframe = "0.33.3"
+egui = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["http", "image"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+notify-rust = "4.17.0"
+rfd = "0.17.2"
+ytdl-core = { version = "0.1.0", path = "../ytdl-core" }
+ytdl-runner = { version = "0.1.0", path = "../ytdl-runner" }
+
+# `cargo deb -p youtube-downloader` after `packaging/fetch-tools.sh linux-x64 packaging/build/linux-x64`.
+[package.metadata.deb]
+maintainer = "genetzhs <genetzhs@users.noreply.github.com>"
+copyright = "2026 genetzhs"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+A native desktop app for downloading audio and video with yt-dlp. Paste links, pick \
+MP3/FLAC/Opus or a video quality, and watch the queue. Includes yt-dlp and ffmpeg; \
+yt-dlp keeps itself up to date."""
+section = "video"
+priority = "optional"
+depends = "$auto, libxkbcommon-x11-0, libgl1"
+assets = [
+    ["target/release/youtube-downloader", "usr/bin/", "755"],
+    ["../../packaging/build/linux-x64/yt-dlp", "usr/lib/youtube-downloader/bin/", "755"],
+    ["../../packaging/build/linux-x64/ffmpeg", "usr/lib/youtube-downloader/bin/", "755"],
+    ["../../packaging/build/linux-x64/ffprobe", "usr/lib/youtube-downloader/bin/", "755"],
+    ["../../packaging/linux/youtube-downloader.desktop", "usr/share/applications/", "644"],
+    ["../../assets/icon_16.png", "usr/share/icons/hicolor/16x16/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_24.png", "usr/share/icons/hicolor/24x24/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_32.png", "usr/share/icons/hicolor/32x32/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_48.png", "usr/share/icons/hicolor/48x48/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_64.png", "usr/share/icons/hicolor/64x64/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_128.png", "usr/share/icons/hicolor/128x128/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_256.png", "usr/share/icons/hicolor/256x256/apps/youtube-downloader.png", "644"],
+    ["../../assets/icon_512.png", "usr/share/icons/hicolor/512x512/apps/youtube-downloader.png", "644"],
+    ["../../packaging/THIRD-PARTY-NOTICES.md", "usr/share/doc/youtube-downloader/", "644"],
+    ["fonts/OFL.txt", "usr/share/doc/youtube-downloader/fonts-OFL.txt", "644"],
+]

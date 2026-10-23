@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=YouTube Downloader
+GenericName=Video Downloader
+Comment=Download audio and video with yt-dlp
+Exec=youtube-downloader %U
+Icon=youtube-downloader
+Terminal=false
+Categories=AudioVideo;Network;
+Keywords=youtube;download;yt-dlp;mp3;video;audio;
+StartupWMClass=youtube-downloader

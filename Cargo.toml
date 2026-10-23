@@ -1,7 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/ytdl-core"]
+members = ["crates/app","crates/ytdl-core", "crates/ytdl-runner"]
 
 [workspace.package]
 edition = "2024"
 license = "MIT"
+rust-version = "1.88"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1

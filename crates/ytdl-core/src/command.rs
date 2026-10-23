@@ -26,6 +26,29 @@ pub fn build_args(opts: &DownloadOptions, out_dir: &Path, url: &str) -> Vec<Stri
     args
 }
 
+/// Arguments that look up title, channel and thumbnail without downloading.
+/// Uses the same cookies and JS runtime as the download, so a link that needs
+/// them does not fail here first.
+pub fn info_args(opts: &DownloadOptions, url: &str) -> Vec<String> {
+    let mut args: Vec<String> = ["-J", "--flat-playlist", "--no-warnings"]
+        .map(String::from)
+        .to_vec();
+    if opts.no_playlist {
+        args.push("--no-playlist".into());
+    }
+    if let Some(rt) = opts.js_runtime {
+        args.push("--js-runtimes".into());
+        args.push(rt.as_str().into());
+    }
+    if let Some(b) = opts.cookies_from {
+        args.push("--cookies-from-browser".into());
+        args.push(b.as_str().into());
+    }
+    args.push("--".into());
+    args.push(url.into());
+    args
+}
+
 /// The command as the user sees it in the preview: only the options they control.
 pub fn preview(opts: &DownloadOptions) -> String {
     let mut parts = vec!["yt-dlp".to_string()];
