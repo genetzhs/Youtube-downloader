@@ -15,8 +15,7 @@ A fast, native desktop app for downloading audio and video with
 | ![Main window, dark theme, two finished audio downloads](docs/screenshots/main-dark.png) | ![Main window, light theme, video mode with sample queue](docs/screenshots/main-light.png) |
 | ![Settings page, dark theme](docs/screenshots/settings.png) | ![History page, light theme](docs/screenshots/history.png) |
 
-> The dark screenshot shows two real downloads; the light one uses sample queue items
-> (`--demo`) to show every state at once.
+> The main window screenshots use sample queue items (`--demo`) to show every state at once.
 
 ## Features
 
