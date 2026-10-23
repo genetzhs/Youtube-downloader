@@ -45,7 +45,16 @@ pub struct Item {
     pub final_path: Option<PathBuf>,
     /// Title, channel and thumbnail, once yt-dlp has looked them up.
     pub info: Option<MediaInfo>,
+    /// What yt-dlp reported about the browser cookies on the last attempt.
+    pub cookies: Option<CookieReport>,
     last_error: Option<ErrorKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CookieReport {
+    pub browser: String,
+    pub count: u32,
+    pub undecrypted: u32,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -98,6 +107,7 @@ impl Queue {
             playlist: None,
             final_path: None,
             info: None,
+            cookies: None,
             last_error: None,
         });
         id
@@ -166,6 +176,17 @@ impl Queue {
                 item.progress = None;
             }
             Event::Error(kind) => item.last_error = Some(kind.clone()),
+            Event::CookiesRead {
+                browser,
+                count,
+                undecrypted,
+            } => {
+                item.cookies = Some(CookieReport {
+                    browser: browser.clone(),
+                    count: *count,
+                    undecrypted: *undecrypted,
+                });
+            }
             Event::Destination(_) | Event::AlreadyDownloaded(_) => {}
         }
     }
@@ -221,6 +242,7 @@ impl Queue {
         item.playlist = None;
         item.final_path = None;
         item.last_error = None;
+        item.cookies = None;
     }
 
     pub fn remove(&mut self, id: ItemId) {

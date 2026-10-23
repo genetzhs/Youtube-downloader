@@ -15,7 +15,7 @@ use ytdl_runner::{Downloader, Finished};
 
 use crate::icons::{self, Icon};
 use crate::paths;
-use crate::system::{self, ToolEvent, ToolStatus};
+use crate::system::{self, ToolEvent, ToolStatus, browser_name};
 use crate::theme::{self, Weight, palette, radius};
 use crate::views::{self, Action, DetailsView, Fix, RowState, RowView, Stage};
 use crate::widgets::{self as w, Kind, Ring};
@@ -215,12 +215,24 @@ impl App {
             }
             Action::Retry(id) => self.downloader.retry(id, None),
             Action::UseCookies(id, browser) => {
+                // Remember the choice and retry every download that failed for
+                // want of a signed-in browser, not only the one clicked.
                 self.config.options.cookies_from = Some(browser);
                 self.save_config();
-                if let Some(it) = item(self, id) {
+                let blocked: Vec<Item> = self
+                    .downloader
+                    .queue()
+                    .items()
+                    .iter()
+                    .filter(|it| {
+                        it.id == id || matches!(&it.status, Status::Failed(k) if needs_cookies(k))
+                    })
+                    .cloned()
+                    .collect();
+                for it in blocked {
                     let mut options = it.options.clone();
                     options.cookies_from = Some(browser);
-                    self.downloader.retry(id, Some(options));
+                    self.downloader.retry(it.id, Some(options));
                 }
             }
             Action::Reveal(id) => {
@@ -244,15 +256,6 @@ impl App {
     }
 
     // ---- view data ----
-
-    fn cookie_fix(&self) -> Fix {
-        self.config
-            .options
-            .cookies_from
-            .filter(|b| self.browsers.contains(b))
-            .or_else(|| self.browsers.first().copied())
-            .map_or(Fix::Retry, Fix::UseCookies)
-    }
 
     fn row_view(&self, it: &Item) -> RowView {
         let title = it
@@ -330,12 +333,18 @@ impl App {
                 RowState::Cancelled
             }
             Status::Failed(kind) => {
-                let (headline, hint, fix) = problem_text(kind, self.cookie_fix());
+                let (headline, hint, fix) =
+                    problem_text(kind, it, &self.browsers, self.config.options.cookies_from);
+                let browsers = if needs_cookies(kind) {
+                    self.browsers.clone()
+                } else {
+                    Vec::new()
+                };
                 return RowView {
                     id: it.id,
-                    title: headline.into(),
+                    title: headline,
                     meta: format!("{hint} · {title}"),
-                    state: RowState::Problem { fix },
+                    state: RowState::Problem { fix, browsers },
                 };
             }
         };
@@ -953,53 +962,116 @@ fn short_url(url: &str) -> String {
     s.strip_prefix("www.").unwrap_or(s).to_string()
 }
 
-/// Headline, hint and suggested fix for a failed download.
-fn problem_text(kind: &ErrorKind, cookie_fix: Fix) -> (&'static str, String, Fix) {
+/// Headline, hint and suggested fix for a failed download. For sign-in
+/// problems it accounts for the browser already tried and what yt-dlp
+/// reported about its cookies.
+fn problem_text(
+    kind: &ErrorKind,
+    it: &Item,
+    browsers: &[Browser],
+    preferred: Option<Browser>,
+) -> (String, String, Fix) {
+    let tried = it.options.cookies_from;
+    let next = || match tried {
+        None => preferred
+            .filter(|b| browsers.contains(b))
+            .or_else(|| browsers.first().copied()),
+        Some(t) => browsers.iter().copied().find(|b| *b != t),
+    };
+    let cookie_fix = || next().map_or(Fix::Retry, Fix::UseCookies);
+    let s = |x: &str| x.to_string();
     match kind {
-        ErrorKind::BotCheck => (
-            "YouTube wants you signed in",
-            "Use your browser's cookies to continue".into(),
-            cookie_fix,
-        ),
-        ErrorKind::SignInRequired => (
-            "This video needs a signed-in account",
-            "Sign in in your browser, then use its cookies".into(),
-            cookie_fix,
-        ),
+        ErrorKind::BotCheck | ErrorKind::SignInRequired => match tried {
+            None if *kind == ErrorKind::BotCheck => (
+                s("YouTube wants you signed in"),
+                s("Use the cookies of a browser where you're signed in to YouTube"),
+                cookie_fix(),
+            ),
+            None => (
+                s("This video needs a signed-in account"),
+                s("Sign in to YouTube in your browser, then use its cookies"),
+                cookie_fix(),
+            ),
+            Some(b) => {
+                let name = browser_name(b);
+                let hint = match &it.cookies {
+                    None => format!(
+                        "{name}'s cookies could not be read. Open the log, or try another browser"
+                    ),
+                    Some(r) if r.count == 0 => {
+                        format!(
+                            "No cookies found in {name}. Sign in to YouTube in {name}, or try another browser"
+                        )
+                    }
+                    Some(r) if r.undecrypted > 0 && r.undecrypted * 2 >= r.count => format!(
+                        "{} of {} {name} cookies couldn't be decrypted. Unlock your keyring or try another browser",
+                        r.undecrypted, r.count
+                    ),
+                    Some(_) => format!(
+                        "Open youtube.com in {name}, make sure you're signed in, then retry"
+                    ),
+                };
+                (
+                    format!("Still blocked with {name} cookies"),
+                    hint,
+                    cookie_fix(),
+                )
+            }
+        },
+        ErrorKind::CookiesUnreadable(msg) => {
+            let name = tried.map_or("the browser", browser_name);
+            let m = msg.to_lowercase();
+            let hint = if m.contains("database") {
+                format!("{name} has no profile on this computer")
+            } else if m.contains("secretstorage") || m.contains("keyring") {
+                s("The desktop keyring is locked or unavailable")
+            } else {
+                s("See the log for details")
+            };
+            (format!("Couldn't read {name} cookies"), hint, cookie_fix())
+        }
         ErrorKind::Private => (
-            "This video is private",
-            "Only its owner can share it".into(),
+            s("This video is private"),
+            s("Only its owner can share it"),
             Fix::None,
         ),
         ErrorKind::Unavailable => (
-            "This video is unavailable",
-            "It may have been removed".into(),
+            s("This video is unavailable"),
+            s("It may have been removed"),
             Fix::None,
         ),
         ErrorKind::UnsupportedUrl => (
-            "This link isn't supported",
-            "Check the address and try again".into(),
+            s("This link isn't supported"),
+            s("Check the address and try again"),
             Fix::None,
         ),
         ErrorKind::MissingFfmpeg => (
-            "ffmpeg is missing",
-            "Reinstall the app, or set ffmpeg in Settings".into(),
+            s("ffmpeg is missing"),
+            s("Reinstall the app, or set ffmpeg in Settings"),
             Fix::Retry,
         ),
         ErrorKind::MissingYtDlp => (
-            "yt-dlp is missing",
-            "Update it from Settings, then retry".into(),
+            s("yt-dlp is missing"),
+            s("Update it from Settings, then retry"),
             Fix::Retry,
         ),
         ErrorKind::Network => (
-            "Network problem",
-            "Check your connection and retry".into(),
+            s("Network problem"),
+            s("Check your connection and retry"),
             Fix::Retry,
         ),
         ErrorKind::Other(_) => (
-            "Download failed",
-            "See the log for details".into(),
+            s("Download failed"),
+            s("See the log for details"),
             Fix::Retry,
         ),
     }
+}
+
+/// Failures that browser cookies can fix.
+fn needs_cookies(kind: &ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::BotCheck | ErrorKind::SignInRequired | ErrorKind::CookiesUnreadable(_)
+    )
 }

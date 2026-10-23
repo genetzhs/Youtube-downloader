@@ -21,8 +21,10 @@ pub enum RowState {
     Done,
     Cancelled,
     /// A problem the user can act on; `fix` is the suggested button.
+    /// `browsers` (for sign-in problems) are offered in an "Other browser" menu.
     Problem {
         fix: Fix,
+        browsers: Vec<Browser>,
     },
 }
 
@@ -117,9 +119,12 @@ pub fn row(
                     }
                     let right_w = match &row.state {
                         RowState::Done => 150.0,
+                        // Room for "Use … cookies" plus "Other browser".
                         RowState::Problem {
                             fix: Fix::UseCookies(_),
-                        } => 210.0,
+                            ..
+                        } => 330.0,
+                        RowState::Problem { browsers, .. } if !browsers.is_empty() => 250.0,
                         RowState::Problem { .. } | RowState::Cancelled => 130.0,
                         _ => 110.0,
                     };
@@ -177,24 +182,45 @@ pub fn row(
                                     actions.push(Action::Retry(row.id));
                                 }
                             }
-                            RowState::Problem { fix } => match fix {
-                                Fix::UseCookies(b) => {
-                                    let label = format!("Use {} cookies", browser_name(*b));
-                                    if w::button(ui, Kind::Warning, None, &label, 36.0).clicked() {
-                                        actions.push(Action::UseCookies(row.id, *b));
+                            RowState::Problem { fix, browsers } => {
+                                if !browsers.is_empty() {
+                                    ui.menu_button(
+                                        egui::RichText::new("Other browser")
+                                            .font(theme::font(13.0, Weight::Medium))
+                                            .color(p.warn_text),
+                                        |ui| {
+                                            for b in browsers {
+                                                if ui.button(browser_name(*b)).clicked() {
+                                                    actions.push(Action::UseCookies(row.id, *b));
+                                                    ui.close();
+                                                }
+                                            }
+                                        },
+                                    );
+                                }
+                                match fix {
+                                    Fix::UseCookies(b) => {
+                                        let label = format!("Use {} cookies", browser_name(*b));
+                                        if w::button(ui, Kind::Warning, None, &label, 36.0)
+                                            .clicked()
+                                        {
+                                            actions.push(Action::UseCookies(row.id, *b));
+                                        }
+                                    }
+                                    Fix::Retry => {
+                                        if w::button(ui, Kind::Warning, None, "Retry", 36.0)
+                                            .clicked()
+                                        {
+                                            actions.push(Action::Retry(row.id));
+                                        }
+                                    }
+                                    Fix::None => {
+                                        if w::icon_button(ui, Icon::Close, "Remove").clicked() {
+                                            actions.push(Action::Remove(row.id));
+                                        }
                                     }
                                 }
-                                Fix::Retry => {
-                                    if w::button(ui, Kind::Warning, None, "Retry", 36.0).clicked() {
-                                        actions.push(Action::Retry(row.id));
-                                    }
-                                }
-                                Fix::None => {
-                                    if w::icon_button(ui, Icon::Close, "Remove").clicked() {
-                                        actions.push(Action::Remove(row.id));
-                                    }
-                                }
-                            },
+                            }
                         }
                     });
                 });

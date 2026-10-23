@@ -46,6 +46,8 @@ pub enum ErrorKind {
     MissingFfmpeg,
     /// yt-dlp itself could not be found or started.
     MissingYtDlp,
+    /// The browser's cookies could not be read (no profile, locked keyring...).
+    CookiesUnreadable(String),
     Network,
     Other(String),
 }
@@ -63,6 +65,12 @@ pub enum Event {
     PlaylistItem {
         index: u32,
         count: u32,
+    },
+    /// yt-dlp read the browser's cookies: how many, and how many it could not decrypt.
+    CookiesRead {
+        browser: String,
+        count: u32,
+        undecrypted: u32,
     },
     Error(ErrorKind),
 }
@@ -84,6 +92,9 @@ impl Event {
 
 static PARTIAL_STREAM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\.f\d+(-\d+)?\.\w+$").unwrap());
+static COOKIES_READ: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"Extracted (\d+) cookies from (\w+)(?: \((\d+) could not be decrypted\))?").unwrap()
+});
 static PLAYLIST_ITEM: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\[download\] Downloading (?:item|video) (\d+) of (\d+)").unwrap()
 });
@@ -109,6 +120,13 @@ pub fn parse_line(line: &str) -> Option<Event> {
         && let Some(p) = rest.strip_suffix(" has already been downloaded")
     {
         return Some(Event::AlreadyDownloaded(PathBuf::from(p)));
+    }
+    if let Some(c) = COOKIES_READ.captures(line) {
+        return Some(Event::CookiesRead {
+            count: c[1].parse().ok()?,
+            browser: c[2].to_string(),
+            undecrypted: c.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0),
+        });
     }
     if let Some(c) = PLAYLIST_ITEM.captures(line) {
         return Some(Event::PlaylistItem {
@@ -178,6 +196,13 @@ pub fn classify_error(msg: &str) -> ErrorKind {
     let m = msg.to_lowercase();
     if m.contains("confirm you") && m.contains("not a bot") {
         ErrorKind::BotCheck
+    } else if m.contains("cookies database")
+        || m.contains("secretstorage")
+        || m.contains("keyring")
+        || m.contains("failed to decrypt")
+        || m.contains("could not copy") && m.contains("cookie")
+    {
+        ErrorKind::CookiesUnreadable(msg.to_string())
     } else if m.contains("sign in to confirm your age")
         || m.contains("members-only")
         || m.contains("join this channel")
@@ -368,6 +393,41 @@ mod tests {
             parse_line("ERROR: something odd"),
             Some(Event::Error(ErrorKind::Other("something odd".into())))
         );
+    }
+
+    #[test]
+    fn cookie_reports() {
+        assert_eq!(
+            parse_line("Extracted 412 cookies from chrome (3 could not be decrypted)"),
+            Some(Event::CookiesRead {
+                browser: "chrome".into(),
+                count: 412,
+                undecrypted: 3
+            })
+        );
+        assert_eq!(
+            parse_line("[Cookies] Extracted 0 cookies from firefox"),
+            Some(Event::CookiesRead {
+                browser: "firefox".into(),
+                count: 0,
+                undecrypted: 0
+            })
+        );
+        assert!(matches!(
+            parse_line(
+                "ERROR: could not find chrome cookies database in \"/home/u/.config/google-chrome\""
+            ),
+            Some(Event::Error(ErrorKind::CookiesUnreadable(_)))
+        ));
+        assert!(matches!(
+            parse_line(
+                "ERROR: secretstorage not available as the `secretstorage` module is not installed"
+            ),
+            Some(Event::Error(ErrorKind::CookiesUnreadable(_)))
+        ));
+        // The bot check mentions --cookies-from-browser but is still a bot check.
+        let bot = "ERROR: [youtube] Cja0xrDjILM: Sign in to confirm you’re not a bot. This helps protect our community. Use --cookies-from-browser or --cookies for the authentication.";
+        assert_eq!(parse_line(bot), Some(Event::Error(ErrorKind::BotCheck)));
     }
 
     #[test]
