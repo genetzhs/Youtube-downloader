@@ -600,9 +600,9 @@ impl App {
             if video {
                 toggles.push(("Subtitles", &mut o.embed_subs));
             }
+            // On/off options look selected when on, like the other choices.
             for (label, value) in toggles {
-                let text = format!("{label} · {}", if *value { "on" } else { "off" });
-                if w::chip(ui, &text, false).clicked() {
+                if w::chip(ui, label, *value).clicked() {
                     *value = !*value;
                     changed = true;
                 }
