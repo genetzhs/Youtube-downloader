@@ -12,10 +12,11 @@ A fast, native desktop app for downloading audio and video with
 
 | Dark | Light |
 |---|---|
-| ![Main window, dark theme, audio mode](docs/screenshots/main-dark.png) | ![Main window, light theme, video mode](docs/screenshots/main-light.png) |
+| ![Main window, dark theme, two finished audio downloads](docs/screenshots/main-dark.png) | ![Main window, light theme, video mode with sample queue](docs/screenshots/main-light.png) |
+| ![Settings page, dark theme](docs/screenshots/settings.png) | ![History page, light theme](docs/screenshots/history.png) |
 
-> **Note:** The app is still being built. These are screenshots of the current build with
-> sample queue items (`--demo`); downloading from the window arrives in M4. See [Status](#status).
+> The dark screenshot shows two real downloads; the light one uses sample queue items
+> (`--demo`) to show every state at once. Packages are not published yet, see [Status](#status).
 
 ## Features
 
@@ -74,9 +75,15 @@ If it does not start, your system may be missing FUSE 2: install `libfuse2`
 
 1. Copy a link from YouTube (or any [site yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)).
 2. Choose **Audio** or **Video** at the top, then the format and quality.
-3. Paste the link (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>V</kbd>) and press **Download**. Paste
-   several links at once to queue them all.
-4. When a card shows a check mark, click **Show in folder**.
+3. Press <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>V</kbd> anywhere in the window: the links start
+   downloading right away. Or type in the field and press **Download**. Paste several links at
+   once to queue them all.
+4. When a card shows a check mark, click **Show in folder**. Click any card to see its details,
+   copy the exact yt-dlp command, or open its log.
+
+Finished downloads are listed under **History** (clock icon), where you can search them and
+download one again. **Settings** (sliders icon) has the folders, file name template, how many
+downloads run at once, browser cookies, yt-dlp updates and the theme.
 
 Files go to `~/Music/YouTube` for audio and `~/Videos/YouTube` (Linux) or `~/Movies/YouTube`
 (macOS) for video. Change this in **Settings**.
@@ -120,9 +127,9 @@ Deleting these folders resets the app.
 | M1 | `ytdl-core`: command builder, progress parser, queue, settings, history, tool lookup | ✅ done |
 | M2 | `ytdl-runner`: run yt-dlp, live progress, cancel, two at a time, yt-dlp self-update | ✅ done |
 | M3 | Window, dark and light themes, custom widgets | ✅ done |
-| M4 | Connect the window to the queue: real downloads, thumbnails, log | next |
-| M5 | Settings, history, notifications | |
-| M6 | Packages: `.deb`, AppImage, macOS `.dmg`, release workflow | |
+| M4 | Real downloads from the window: queue, thumbnails, details, log, cookie retry | ✅ done |
+| M5 | Settings, history, notifications | ✅ done |
+| M6 | Packages: `.deb`, AppImage, macOS `.dmg`, release workflow | next |
 
 ## Build from source
 
@@ -135,15 +142,16 @@ cd Youtube-downloader
 cargo test
 ```
 
-Run the app (add `--demo` to fill the queue with sample items, `--theme dark|light` to
-force a theme):
+Run the app. When built from source it uses `yt-dlp` and `ffmpeg` from your `PATH` (or
+downloads yt-dlp itself on first start):
 
 ```bash
-cargo run -p youtube-downloader -- --demo
+cargo run -p youtube-downloader
+cargo run -p youtube-downloader -- "https://www.youtube.com/watch?v=<id>"   # queue links at start
+cargo run -p youtube-downloader -- --demo --theme light                      # sample queue, light theme
 ```
 
-Until the window starts downloads (M4), you can try the download engine from the terminal.
-It uses `yt-dlp` and `ffmpeg` from your `PATH`:
+The download engine also has a terminal example:
 
 ```bash
 cargo run -p ytdl-runner --example cli -- "https://www.youtube.com/watch?v=<id>" --out ~/Downloads
@@ -154,8 +162,8 @@ cargo run -p ytdl-runner --example cli -- "https://www.youtube.com/watch?v=<id>"
 
 ```
 crates/
-  app/           The egui window: theme, widgets, layout. Builds the
-                 `youtube-downloader` binary.
+  app/           The egui window: theme, widgets, pages (Downloads, History,
+                 Settings). Builds the `youtube-downloader` binary.
   ytdl-core/     Logic with no UI: yt-dlp arguments, output parsing, queue,
                  settings, history, finding tools. Fully unit tested.
   ytdl-runner/   Runs yt-dlp processes for the queue and updates yt-dlp.

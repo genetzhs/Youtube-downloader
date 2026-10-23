@@ -9,5 +9,9 @@ rust-version.workspace = true
 directories = "6.0.0"
 eframe = "0.33.3"
 egui = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["http", "image"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+notify-rust = "4.17.0"
+rfd = "0.17.2"
 ytdl-core = { version = "0.1.0", path = "../ytdl-core" }
 ytdl-runner = { version = "0.1.0", path = "../ytdl-runner" }

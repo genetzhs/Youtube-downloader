@@ -15,7 +15,6 @@ pub enum Icon {
     Folder,
     Check,
     Close,
-    Pause,
     Warning,
     Copy,
     Sun,
@@ -122,15 +121,6 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Icon::Close => {
             line(vec![g.p(6.0, 6.0), g.p(18.0, 18.0)]);
             line(vec![g.p(18.0, 6.0), g.p(6.0, 18.0)]);
-        }
-        Icon::Pause => {
-            for x in [6.0, 14.0] {
-                painter.rect_filled(
-                    Rect::from_min_max(g.p(x, 5.0), g.p(x + 4.0, 19.0)),
-                    1.0 * g.scale,
-                    color,
-                );
-            }
         }
         Icon::Warning => {
             closed(vec![g.p(12.0, 3.5), g.p(22.0, 20.5), g.p(2.0, 20.5)]);
