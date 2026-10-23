@@ -236,34 +236,36 @@ mod tests {
     /// Mint ships Firefox, but people often sign in to YouTube in Chrome:
     /// the browser used most recently must come first.
     #[test]
-    #[cfg(not(target_os = "macos"))]
     fn most_recently_used_browser_first() {
+        let (firefox, chrome, chrome_profile, chromium) = if cfg!(target_os = "macos") {
+            (
+                "Library/Application Support/Firefox/Profiles/abc.default/cookies.sqlite",
+                "Library/Application Support/Google/Chrome/Default/Cookies",
+                "Library/Application Support/Google/Chrome/Profile 1/Network/Cookies",
+                "Library/Application Support/Chromium",
+            )
+        } else {
+            (
+                ".mozilla/firefox/abc.default/cookies.sqlite",
+                ".config/google-chrome/Default/Cookies",
+                ".config/google-chrome/Profile 1/Network/Cookies",
+                ".config/chromium",
+            )
+        };
         let home = std::env::temp_dir().join(format!("ytdl-app-browsers-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
-        touch(
-            &home.join(".mozilla/firefox/abc.default/cookies.sqlite"),
-            Duration::from_secs(86_400 * 30),
-        );
-        touch(
-            &home.join(".config/google-chrome/Default/Cookies"),
-            Duration::from_secs(60),
-        );
-        std::fs::create_dir_all(home.join(".config/chromium")).unwrap(); // installed, never used
+        touch(&home.join(firefox), Duration::from_secs(86_400 * 30));
+        touch(&home.join(chrome), Duration::from_secs(60));
+        std::fs::create_dir_all(home.join(chromium)).unwrap(); // installed, never used
         assert_eq!(
             installed_browsers_in(&home),
             [Browser::Chrome, Browser::Firefox, Browser::Chromium]
         );
 
         // Newer Chrome versions keep cookies under Network/.
-        touch(
-            &home.join(".mozilla/firefox/abc.default/cookies.sqlite"),
-            Duration::from_secs(1),
-        );
+        touch(&home.join(firefox), Duration::from_secs(1));
         assert_eq!(installed_browsers_in(&home)[0], Browser::Firefox);
-        touch(
-            &home.join(".config/google-chrome/Profile 1/Network/Cookies"),
-            Duration::ZERO,
-        );
+        touch(&home.join(chrome_profile), Duration::ZERO);
         assert_eq!(installed_browsers_in(&home)[0], Browser::Chrome);
         let _ = std::fs::remove_dir_all(home);
     }
