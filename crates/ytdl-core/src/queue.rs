@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use crate::info::MediaInfo;
 use crate::options::DownloadOptions;
 use crate::progress::{ErrorKind, Event, PostStep, Progress};
 
@@ -42,8 +43,8 @@ pub struct Item {
     pub progress: Option<Progress>,
     pub playlist: Option<(u32, u32)>,
     pub final_path: Option<PathBuf>,
-    pub title: Option<String>,
-    pub thumbnail_url: Option<String>,
+    /// Title, channel and thumbnail, once yt-dlp has looked them up.
+    pub info: Option<MediaInfo>,
     last_error: Option<ErrorKind>,
 }
 
@@ -96,8 +97,7 @@ impl Queue {
             progress: None,
             playlist: None,
             final_path: None,
-            title: None,
-            thumbnail_url: None,
+            info: None,
             last_error: None,
         });
         id
@@ -132,10 +132,18 @@ impl Queue {
         started
     }
 
-    pub fn set_info(&mut self, id: ItemId, title: Option<String>, thumbnail_url: Option<String>) {
+    pub fn set_info(&mut self, id: ItemId, info: MediaInfo) {
         if let Some(item) = self.get_mut(id) {
-            item.title = title.or(item.title.take());
-            item.thumbnail_url = thumbnail_url.or(item.thumbnail_url.take());
+            item.info = Some(info);
+        }
+    }
+
+    /// Fails a running item without waiting for a process, e.g. when it could not start.
+    pub fn fail(&mut self, id: ItemId, kind: ErrorKind) {
+        if let Some(item) = self.get_mut(id)
+            && item.status.is_active()
+        {
+            item.status = Status::Failed(kind);
         }
     }
 

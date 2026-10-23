@@ -4,6 +4,7 @@
 pub mod command;
 pub mod config;
 pub mod history;
+pub mod info;
 pub mod options;
 pub mod progress;
 pub mod queue;

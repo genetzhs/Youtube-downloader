@@ -44,6 +44,8 @@ pub enum ErrorKind {
     Unavailable,
     UnsupportedUrl,
     MissingFfmpeg,
+    /// yt-dlp itself could not be found or started.
+    MissingYtDlp,
     Network,
     Other(String),
 }
