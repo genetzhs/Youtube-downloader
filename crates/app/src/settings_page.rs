@@ -268,6 +268,24 @@ fn tools(app: &mut App, ui: &mut egui::Ui) -> bool {
                 .changed();
             },
         );
+        w::setting_row(
+            ui,
+            false,
+            "Check for app updates",
+            if ytdl_runner::self_update::running_appimage().is_some() {
+                "Looks for a new version at start and updates the AppImage with one click"
+            } else {
+                "Looks for a new version at start and links to its download"
+            },
+            |ui| {
+                changed |= w::switch(
+                    ui,
+                    &mut app.config.check_app_updates,
+                    "Check for app updates",
+                )
+                .changed();
+            },
+        );
         let ffmpeg_desc = app.tools.ffmpeg.as_ref().map_or(
             "Not found. Audio conversion and merging video need it.".to_string(),
             |p| paths::display(p),
