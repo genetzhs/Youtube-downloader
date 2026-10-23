@@ -50,6 +50,7 @@ pub fn rows() -> Vec<RowView> {
             "Use your browser's cookies to continue · [Video title]",
             RowState::Problem {
                 fix: Fix::UseCookies(Browser::Firefox),
+                browsers: vec![Browser::Firefox, Browser::Chrome],
             },
         ),
     ]
