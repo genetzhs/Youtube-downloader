@@ -12,6 +12,7 @@ use ytdl_runner::{Downloader, Finished, Tools};
 /// `ok` downloads, `bot` fails with the bot check, `slow` hangs until stopped.
 const FAKE_YTDLP: &str = r#"#!/bin/sh
 for a in "$@"; do url="$a"; done
+OUT="$(dirname "$0")/out"
 for a in "$@"; do
   if [ "$a" = "-J" ]; then
     printf '{"title":"Title of %s","uploader":"Chan","duration":61}\n' "$url"
@@ -45,8 +46,6 @@ fn setup(name: &str) -> (PathBuf, PathBuf) {
     std::fs::write(&script, FAKE_YTDLP).unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // SAFETY: tests in this file all set the same value.
-    unsafe { std::env::set_var("OUT", root.join("out")) };
     (root, script)
 }
 
