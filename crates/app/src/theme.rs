@@ -42,24 +42,24 @@ const fn hex(rgb: u32) -> Color32 {
 }
 
 pub const DARK: Palette = Palette {
-    bg: hex(0x0E0E10),
-    surface: hex(0x17171A),
-    surface_hover: hex(0x1F1F23),
-    border: hex(0x26262B),
-    border_strong: hex(0x3A3A40),
+    bg: hex(0x1F2125),
+    surface: hex(0x282A2F),
+    surface_hover: hex(0x31343A),
+    border: hex(0x3A3D44),
+    border_strong: hex(0x4B4F57),
     text: hex(0xEDEDEF),
     muted: hex(0xA1A1AA),
-    faint: hex(0x8E8E96),
-    accent: hex(0x3B4BF5),
-    accent_hover: hex(0x4F5DF7),
+    faint: hex(0x9C9CA6),
+    accent: hex(0xD32F2F),
+    accent_hover: hex(0xB71C1C),
     on_accent: hex(0xFFFFFF),
-    segment_bg: hex(0x1F1F23),
-    selected_border: hex(0x3A44B8),
-    selected_glow: Color32::from_rgba_premultiplied(13, 17, 55, 56),
-    track: hex(0x26262B),
+    segment_bg: hex(0x31343A),
+    selected_border: hex(0x9A2A2A),
+    selected_glow: Color32::from_rgba_premultiplied(60, 10, 10, 60),
+    track: hex(0x3A3D44),
     success: hex(0x4ADE80),
     success_bg: hex(0x10301C),
-    warn_bg: hex(0x221B10),
+    warn_bg: hex(0x2E2617),
     warn_border: hex(0x4A3818),
     warn_icon_bg: hex(0x3D2E12),
     warn_icon: hex(0xF5B544),
@@ -76,12 +76,12 @@ pub const LIGHT: Palette = Palette {
     text: hex(0x18181B),
     muted: hex(0x5F5E66),
     faint: hex(0x67666E),
-    accent: hex(0x3B4BF5),
-    accent_hover: hex(0x2F3EE0),
+    accent: hex(0xD32F2F),
+    accent_hover: hex(0xB71C1C),
     on_accent: hex(0xFFFFFF),
     segment_bg: hex(0xEAE8E2),
-    selected_border: hex(0xD9DCFF),
-    selected_glow: hex(0xEEF0FF),
+    selected_border: hex(0xF3C2C2),
+    selected_glow: hex(0xFDECEC),
     track: hex(0xECEAE4),
     success: hex(0x17803D),
     success_bg: hex(0xE9F7EE),
@@ -224,7 +224,8 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     v.extreme_bg_color = p.surface;
     v.faint_bg_color = p.surface_hover;
     v.code_bg_color = p.surface_hover;
-    v.hyperlink_color = p.accent_hover;
+    // Red links on dark gray need a lighter shade to stay readable.
+    v.hyperlink_color = if dark { hex(0xFF8A80) } else { p.accent_hover };
     v.selection.bg_fill = p.accent.gamma_multiply(0.45);
     v.selection.stroke = stroke(1.0, p.text);
     v.override_text_color = Some(p.text);
