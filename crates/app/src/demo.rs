@@ -1,40 +1,77 @@
-//! Sample queue rows for `--demo`, used for screenshots until the real
-//! queue is connected (M4). Titles are placeholders on purpose.
+//! Sample queue rows for `--demo`, used for screenshots and for trying the
+//! layout without downloading anything. Titles are placeholders on purpose.
 
-use crate::app::{Row, RowState};
+use ytdl_core::options::Browser;
 
-pub fn rows() -> Vec<Row> {
+use crate::views::{DetailsView, Fix, RowState, RowView, Stage};
+use crate::widgets::Ring;
+
+pub fn rows() -> Vec<RowView> {
+    let row = |id, title: &str, meta: &str, state| RowView {
+        id,
+        title: title.into(),
+        meta: meta.into(),
+        state,
+    };
     vec![
-        Row {
-            title: "[Video title]".into(),
-            meta: "1080p · MP4 · 154 of 248 MB · 12.4 MB/s · 8s left".into(),
-            state: RowState::Downloading {
-                fraction: 0.62,
-                percent: "62%".into(),
+        row(
+            1,
+            "[Video title]",
+            "1080p · MP4 · 154 MB of 248 MB · 12.4 MB/s · 8s left",
+            RowState::Active {
+                ring: Ring::Progress(0.62),
+                percent: Some("62%".into()),
             },
-        },
-        Row {
-            title: "[Video title]".into(),
-            meta: "Audio · MP3 320k · 2.6 of 9.4 MB · 3.1 MB/s".into(),
-            state: RowState::Downloading {
-                fraction: 0.28,
-                percent: "28%".into(),
+        ),
+        row(
+            2,
+            "[Video title]",
+            "MP3 · 320k · 2.6 MB of 9.4 MB · 3.1 MB/s · 2s left",
+            RowState::Active {
+                ring: Ring::Progress(0.28),
+                percent: Some("28%".into()),
             },
-        },
-        Row {
-            title: "[Playlist title] · 12 videos".into(),
-            meta: "Waiting for a free slot".into(),
-            state: RowState::Waiting,
-        },
-        Row {
-            title: "[Video title]".into(),
-            meta: "720p · MKV · 96 MB · finished".into(),
-            state: RowState::Done,
-        },
-        Row {
-            title: "YouTube wants you signed in".into(),
-            meta: "Use your browser's cookies to continue.".into(),
-            state: RowState::NeedsCookies,
-        },
+        ),
+        row(
+            3,
+            "[Playlist title]",
+            "1080p · MP4 · Waiting for a free slot",
+            RowState::Waiting,
+        ),
+        row(
+            4,
+            "[Video title]",
+            "720p · MKV · 96 MB · finished",
+            RowState::Done,
+        ),
+        row(
+            5,
+            "YouTube wants you signed in",
+            "Use your browser's cookies to continue · [Video title]",
+            RowState::Problem {
+                fix: Fix::UseCookies(Browser::Firefox),
+            },
+        ),
     ]
+}
+
+pub fn details() -> DetailsView {
+    DetailsView {
+        id: 1,
+        title: "[Video title]".into(),
+        channel: Some("[Channel]".into()),
+        duration: Some("12:48".into()),
+        thumbnail: None,
+        fraction: Some(0.62),
+        facts: vec![
+            ("Format".into(), "1080p · MP4".into()),
+            ("Size".into(), "248 MB".into()),
+            ("Speed".into(), "12.4 MB/s".into()),
+            ("Time left".into(), "8s".into()),
+        ],
+        path_label: "Saving to",
+        path: "~/Videos/YouTube/[Video title].mp4".into(),
+        stage: Stage::Working,
+        audio: false,
+    }
 }

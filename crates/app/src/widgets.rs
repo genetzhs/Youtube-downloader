@@ -4,8 +4,8 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, Galley, Rect, Response, Sense, Shape, Stroke,
-    StrokeKind, Ui, Vec2, WidgetInfo, WidgetType, vec2,
+    Color32, CornerRadius, CursorIcon, Galley, Rect, Response, Sense, Shape, Stroke, StrokeKind,
+    Ui, Vec2, WidgetInfo, WidgetType, vec2,
 };
 
 use crate::icons::{self, Icon};
@@ -243,39 +243,56 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str) -> Response {
         .on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Circular progress. `None` draws the dashed "waiting" ring.
-pub fn progress_ring(ui: &mut Ui, fraction: Option<f32>, diameter: f32) -> Response {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ring {
+    /// 0.0..=1.0
+    Progress(f32),
+    /// Working, but how far along is unknown (starting, converting).
+    Spinner,
+    /// Dashed outline: waiting for a free slot.
+    Waiting,
+}
+
+/// Circular progress indicator at the start of queue rows.
+pub fn progress_ring(ui: &mut Ui, ring: Ring, diameter: f32) -> Response {
     let p = palette(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::hover());
     let c = rect.center();
     let width = (diameter / 11.0).round();
     let r = diameter / 2.0 - width / 2.0;
-    match fraction {
-        Some(f) => {
+    let arc = |from: f32, sweep: f32| {
+        let steps = (sweep / TAU * 64.0).ceil().max(2.0) as usize;
+        let pts: Vec<_> = (0..=steps)
+            .map(|i| {
+                let a = from + sweep * i as f32 / steps as f32;
+                c + vec2(a.cos(), a.sin()) * r
+            })
+            .collect();
+        ui.painter()
+            .add(Shape::line(pts, Stroke::new(width, p.accent)));
+        // Round caps.
+        for end in [from, from + sweep] {
+            ui.painter()
+                .circle_filled(c + vec2(end.cos(), end.sin()) * r, width / 2.0, p.accent);
+        }
+    };
+    match ring {
+        Ring::Progress(f) => {
             ui.painter()
                 .circle_stroke(c, r, Stroke::new(width, p.track));
             let f = f.clamp(0.0, 1.0);
             if f > 0.0 {
-                let steps = (f * 64.0).ceil().max(2.0) as usize;
-                let pts: Vec<_> = (0..=steps)
-                    .map(|i| {
-                        let a = -FRAC_PI_2 + TAU * f * i as f32 / steps as f32;
-                        c + vec2(a.cos(), a.sin()) * r
-                    })
-                    .collect();
-                ui.painter()
-                    .add(Shape::line(pts, Stroke::new(width, p.accent)));
-                // Round caps.
-                for end in [-FRAC_PI_2, -FRAC_PI_2 + TAU * f] {
-                    ui.painter().circle_filled(
-                        c + vec2(end.cos(), end.sin()) * r,
-                        width / 2.0,
-                        p.accent,
-                    );
-                }
+                arc(-FRAC_PI_2, TAU * f);
             }
         }
-        None => {
+        Ring::Spinner => {
+            ui.painter()
+                .circle_stroke(c, r, Stroke::new(width, p.track));
+            let t = ui.input(|i| i.time) as f32;
+            arc(t * TAU * 0.8, TAU * 0.28);
+            ui.ctx().request_repaint();
+        }
+        Ring::Waiting => {
             let dashes = 18;
             for i in 0..dashes {
                 let a0 = TAU * i as f32 / dashes as f32;
@@ -296,6 +313,7 @@ pub fn progress_ring(ui: &mut Ui, fraction: Option<f32>, diameter: f32) -> Respo
 pub enum Badge {
     Done,
     Warning,
+    Cancelled,
 }
 
 /// The round status mark at the start of finished or failed rows.
@@ -305,6 +323,7 @@ pub fn badge(ui: &mut Ui, badge: Badge, diameter: f32) {
     let (bg, fg, icon) = match badge {
         Badge::Done => (p.success_bg, p.success, Icon::Check),
         Badge::Warning => (p.warn_icon_bg, p.warn_icon, Icon::Warning),
+        Badge::Cancelled => (p.surface_hover, p.muted, Icon::Close),
     };
     ui.painter()
         .circle_filled(rect.center(), diameter / 2.0, bg);
@@ -461,14 +480,99 @@ pub fn mono_box(ui: &mut Ui, s: &str) {
         });
 }
 
-pub fn paint_text(
-    ui: &Ui,
-    pos: egui::Pos2,
-    anchor: Align2,
-    s: &str,
-    size: f32,
-    weight: Weight,
-    color: Color32,
+/// An on/off switch. Returns its response; `value` is flipped on click.
+pub fn switch(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
+    let p = palette(ui.ctx());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(40.0, 22.0), Sense::click());
+    if resp.clicked() {
+        *value = !*value;
+        resp.mark_changed();
+    }
+    resp.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, true, *value, label));
+    let t = ui.ctx().animate_bool_responsive(resp.id, *value);
+    let track = if *value { p.accent } else { p.border_strong };
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(11), track);
+    let x = egui::lerp(rect.left() + 11.0..=rect.right() - 11.0, t);
+    ui.painter()
+        .circle_filled(egui::pos2(x, rect.center().y), 8.0, Color32::WHITE);
+    resp.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// One line of a settings card: title and description on the left, the
+/// control on the right. `first` skips the divider above it.
+pub fn setting_row(
+    ui: &mut Ui,
+    first: bool,
+    title: &str,
+    description: &str,
+    control: impl FnOnce(&mut Ui),
 ) {
-    ui.painter().text(pos, anchor, s, font(size, weight), color);
+    let p = palette(ui.ctx());
+    if !first {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+        ui.painter()
+            .hline(r.x_range(), r.center().y, stroke(1.0, p.border));
+    }
+    ui.add_space(6.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.allocate_ui_with_layout(
+            vec2(260.0_f32.min(ui.available_width()), 40.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                text(ui, title, 14.0, Weight::Medium, p.text);
+                if !description.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(description)
+                                .font(font(12.0, Weight::Regular))
+                                .color(p.faint),
+                        )
+                        .wrap(),
+                    );
+                }
+            },
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
+    });
+    ui.add_space(6.0);
+}
+
+/// A titled card for a group of settings.
+pub fn section(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    let p = palette(ui.ctx());
+    card(p.surface, p.border, radius::CARD)
+        .inner_margin(egui::Margin::symmetric(20, 14))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            text(ui, &title.to_uppercase(), 12.0, Weight::SemiBold, p.muted);
+            ui.add_space(4.0);
+            add(ui);
+        });
+}
+
+/// A single-line text field styled like the rest of the app.
+pub fn text_field(ui: &mut Ui, value: &mut String, width: f32, mono_font: bool) -> Response {
+    let p = palette(ui.ctx());
+    let f = if mono_font {
+        theme::mono(13.0)
+    } else {
+        font(13.0, Weight::Regular)
+    };
+    egui::Frame::new()
+        .fill(p.bg)
+        .stroke(stroke(1.0, p.border))
+        .corner_radius(CornerRadius::same(radius::CONTROL))
+        .inner_margin(egui::Margin::symmetric(10, 9))
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .frame(false)
+                    .font(f)
+                    .text_color(p.text)
+                    .desired_width(width),
+            )
+        })
+        .inner
 }

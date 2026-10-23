@@ -9,6 +9,15 @@ pub fn config_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|d| d.config_dir().join(APP_DIR))
 }
 
+/// `~/.local/share/youtube-downloader` on Linux, the same folder as settings on macOS.
+pub fn data_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|d| d.data_dir().join(APP_DIR))
+}
+
+pub fn history_file() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("history.json"))
+}
+
 pub fn config_file() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.toml"))
 }

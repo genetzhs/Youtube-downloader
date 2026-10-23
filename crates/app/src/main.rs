@@ -3,12 +3,18 @@
 //! Options (mainly for development and screenshots):
 //!   --demo                 fill the queue with sample rows
 //!   --theme dark|light     use this theme without saving it
+//!   --page history|settings  open on this page
+//!   <url>...               add these links to the queue (used by "Open with")
 
 mod app;
 mod demo;
+mod history_page;
 mod icons;
 mod paths;
+mod settings_page;
+mod system;
 mod theme;
+mod views;
 mod widgets;
 
 use ytdl_core::config::Theme;
@@ -27,6 +33,21 @@ fn main() -> eframe::Result {
             _ => None,
         });
 
+    let page = match args
+        .iter()
+        .position(|a| a == "--page")
+        .and_then(|i| args.get(i + 1))
+    {
+        Some(p) if p == "history" => app::Page::History,
+        Some(p) if p == "settings" => app::Page::Settings,
+        _ => app::Page::Downloads,
+    };
+    let links: Vec<String> = args
+        .iter()
+        .filter(|a| a.contains("://") || a.starts_with("www."))
+        .cloned()
+        .collect();
+
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("YouTube Downloader")
         .with_app_id("youtube-downloader")
@@ -44,6 +65,13 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "YouTube Downloader",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, demo, theme)))),
+        Box::new(move |cc| {
+            let mut app = app::App::new(cc, demo, theme);
+            app.page = page;
+            if !links.is_empty() {
+                app.add_links(&links.join("\n"));
+            }
+            Ok(Box::new(app))
+        }),
     )
 }

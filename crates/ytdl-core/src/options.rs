@@ -218,3 +218,62 @@ impl Default for DownloadOptions {
         }
     }
 }
+
+impl DownloadOptions {
+    /// Short label such as `MP3 · 320k` or `1080p · MP4`, for queue rows and history.
+    pub fn summary(&self) -> String {
+        match self.mode {
+            Mode::Audio { format, quality } => {
+                let name = match format {
+                    AudioFormat::Best => "Original audio".to_string(),
+                    AudioFormat::Opus => "Opus".to_string(),
+                    f => f.as_str().to_uppercase(),
+                };
+                match quality.0 {
+                    _ if format.is_lossless() || format == AudioFormat::Best => name,
+                    Some(k) => format!("{name} · {k}k"),
+                    None => format!("{name} · best"),
+                }
+            }
+            Mode::Video {
+                resolution,
+                container,
+            } => {
+                let res = resolution.0.map_or("Best".to_string(), |h| format!("{h}p"));
+                let c = match container {
+                    Container::Webm => "WebM".to_string(),
+                    c => c.as_str().to_uppercase(),
+                };
+                format!("{res} · {c}")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summaries() {
+        let audio = |format, k| DownloadOptions {
+            mode: Mode::Audio {
+                format,
+                quality: AudioQuality(k),
+            },
+            ..Default::default()
+        };
+        assert_eq!(audio(AudioFormat::Mp3, Some(320)).summary(), "MP3 · 320k");
+        assert_eq!(audio(AudioFormat::Opus, None).summary(), "Opus · best");
+        assert_eq!(audio(AudioFormat::Flac, Some(320)).summary(), "FLAC");
+        assert_eq!(audio(AudioFormat::Best, None).summary(), "Original audio");
+        let video = DownloadOptions {
+            mode: Mode::Video {
+                resolution: Resolution(Some(1080)),
+                container: Container::Webm,
+            },
+            ..Default::default()
+        };
+        assert_eq!(video.summary(), "1080p · WebM");
+    }
+}

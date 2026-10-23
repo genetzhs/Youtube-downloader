@@ -1,51 +1,54 @@
-//! The main window.
+//! The main window: state, the Downloads page, header and footer.
 
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 
 use egui::{Align, Color32, CornerRadius, Layout, Margin, Rect, UiBuilder, Vec2, vec2};
+use ytdl_core::command::{preview, shell_quote};
 use ytdl_core::config::{Config, Theme as ThemeSetting, default_dirs};
-use ytdl_core::options::{AudioFormat, AudioQuality, Container, Mode, Resolution};
+use ytdl_core::info::human_duration;
+use ytdl_core::options::{AudioFormat, AudioQuality, Browser, Container, Mode, Resolution};
+use ytdl_core::progress::{ErrorKind, PostStep, human_bytes, human_eta};
+use ytdl_core::queue::{Item, ItemId, Status};
+use ytdl_runner::update::UpdateOutcome;
+use ytdl_runner::{Downloader, Finished};
 
 use crate::icons::{self, Icon};
 use crate::paths;
-use crate::theme::{self, Weight, palette, radius, stroke};
-use crate::widgets::{self as w, Badge, Kind};
-
-/// Shared with the demo rows in [`crate::demo`].
-#[derive(Clone)]
-pub enum RowState {
-    Downloading { fraction: f32, percent: String },
-    Waiting,
-    Done,
-    NeedsCookies,
-}
-
-#[derive(Clone)]
-pub struct Row {
-    pub title: String,
-    pub meta: String,
-    pub state: RowState,
-}
-
-pub struct App {
-    config: Config,
-    config_path: Option<PathBuf>,
-    /// Theme forced from the command line; not saved.
-    theme_override: Option<ThemeSetting>,
-    default_dirs: (PathBuf, PathBuf),
-    link: String,
-    rows: Vec<Row>,
-    selected: usize,
-    /// Row under the pointer in the previous frame, so its background is
-    /// drawn behind the content instead of over it.
-    hovered: Option<usize>,
-    hovered_next: Option<usize>,
-}
+use crate::system::{self, ToolEvent, ToolStatus};
+use crate::theme::{self, Weight, palette, radius};
+use crate::views::{self, Action, DetailsView, Fix, RowState, RowView, Stage};
+use crate::widgets::{self as w, Kind, Ring};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
     Audio,
     Video,
+}
+
+pub struct App {
+    pub(crate) config: Config,
+    config_path: Option<PathBuf>,
+    /// Theme forced from the command line; not saved.
+    theme_override: Option<ThemeSetting>,
+    pub(crate) default_dirs: (PathBuf, PathBuf),
+    link: String,
+    link_error: Option<String>,
+    pub(crate) downloader: Downloader,
+    pub(crate) tools: ToolStatus,
+    tool_events: Option<Receiver<ToolEvent>>,
+    browsers: Vec<Browser>,
+    selected: Option<ItemId>,
+    /// Row under the pointer in the previous frame, so its background is
+    /// drawn behind the content instead of over it.
+    hovered: Option<ItemId>,
+    hovered_next: Option<ItemId>,
+    log_for: Option<ItemId>,
+    demo: bool,
+    pub(crate) page: Page,
+    pub(crate) history: ytdl_core::history::History,
+    pub(crate) history_search: String,
+    pub(crate) ctx: egui::Context,
 }
 
 impl App {
@@ -54,31 +57,58 @@ impl App {
         demo: bool,
         theme_override: Option<ThemeSetting>,
     ) -> Self {
-        theme::install(&cc.egui_ctx);
+        let ctx = cc.egui_ctx.clone();
+        theme::install(&ctx);
+        egui_extras::install_image_loaders(&ctx);
         let config_path = paths::config_file();
         let config = config_path
             .as_deref()
             .and_then(|p| Config::load(p).ok())
             .unwrap_or_default();
-        theme::apply_setting(&cc.egui_ctx, theme_override.unwrap_or(config.theme));
+        theme::apply_setting(&ctx, theme_override.unwrap_or(config.theme));
+
+        let mut tools = system::find_tools(
+            config.ytdlp_override.clone(),
+            config.ffmpeg_override.clone(),
+        );
+        let wake_ctx = ctx.clone();
+        let downloader = Downloader::new(config.max_parallel, tools.tools(), move || {
+            wake_ctx.request_repaint()
+        });
+        let wake_ctx = ctx.clone();
+        tools.updating = config.auto_update_ytdlp && !demo;
+        let tool_events = Some(system::check_ytdlp(
+            tools.ytdlp.clone(),
+            tools.updating,
+            move || wake_ctx.request_repaint(),
+        ));
+
         Self {
+            default_dirs: default_dirs(&paths::home(), cfg!(target_os = "macos")),
             config,
             config_path,
             theme_override,
-            default_dirs: default_dirs(&paths::home(), cfg!(target_os = "macos")),
             link: String::new(),
-            rows: if demo {
-                crate::demo::rows()
-            } else {
-                Vec::new()
-            },
-            selected: 0,
+            link_error: None,
+            downloader,
+            tools,
+            tool_events,
+            browsers: system::installed_browsers(),
+            selected: None,
             hovered: None,
             hovered_next: None,
+            log_for: None,
+            demo,
+            page: Page::Downloads,
+            history: paths::history_file()
+                .map(|p| ytdl_core::history::History::load(&p))
+                .unwrap_or_default(),
+            history_search: String::new(),
+            ctx,
         }
     }
 
-    fn save_config(&self) {
+    pub(crate) fn save_config(&self) {
         if let Some(path) = &self.config_path
             && let Err(e) = self.config.save(path)
         {
@@ -86,55 +116,356 @@ impl App {
         }
     }
 
+    pub(crate) fn set_theme(&mut self, setting: ThemeSetting) {
+        self.theme_override = None;
+        self.config.theme = setting;
+        theme::apply_setting(&self.ctx, setting);
+        self.save_config();
+    }
+
+    /// Re-reads tool locations, e.g. after an update or a changed override.
+    pub(crate) fn refresh_tools(&mut self) {
+        let version = self.tools.ytdlp_version.take();
+        let mut fresh = system::find_tools(
+            self.config.ytdlp_override.clone(),
+            self.config.ffmpeg_override.clone(),
+        );
+        fresh.ytdlp_version = if fresh.ytdlp == self.tools.ytdlp {
+            version
+        } else {
+            None
+        };
+        let changed = fresh.ytdlp != self.tools.ytdlp;
+        self.tools = fresh;
+        self.downloader.tools = self.tools.tools();
+        if changed {
+            let ctx = self.ctx.clone();
+            self.tool_events = Some(system::check_ytdlp(
+                self.tools.ytdlp.clone(),
+                false,
+                move || ctx.request_repaint(),
+            ));
+        }
+    }
+
+    pub(crate) fn update_ytdlp_now(&mut self) {
+        self.tools.updating = true;
+        self.tools.update_error = None;
+        let ctx = self.ctx.clone();
+        self.tool_events = Some(system::check_ytdlp(
+            self.tools.ytdlp.clone(),
+            true,
+            move || ctx.request_repaint(),
+        ));
+    }
+
+    fn poll_tools(&mut self) {
+        let Some(rx) = &self.tool_events else { return };
+        let events: Vec<ToolEvent> = rx.try_iter().collect();
+        for ev in events {
+            match ev {
+                ToolEvent::Version(v) => self.tools.ytdlp_version = v,
+                ToolEvent::Updated(result) => {
+                    self.tools.updating = false;
+                    match result {
+                        Ok(UpdateOutcome::UpToDate(v)) => self.tools.ytdlp_version = Some(v),
+                        Ok(UpdateOutcome::Updated { to, .. }) => {
+                            self.refresh_tools();
+                            self.tools.ytdlp_version = Some(to);
+                        }
+                        Err(e) => self.tools.update_error = Some(e),
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn add_links(&mut self, text: &str) {
+        let out_dir = self.config.out_dir(&self.default_dirs);
+        let ids = self
+            .downloader
+            .add_text(text, &self.config.options, &out_dir);
+        if ids.is_empty() {
+            self.link_error = Some(
+                "No link found. Copy the address of a video or playlist and paste it here.".into(),
+            );
+        } else {
+            self.link_error = None;
+            self.link.clear();
+            if self.selected.is_none() {
+                self.selected = ids.first().copied();
+            }
+        }
+    }
+
+    fn on_finished(&mut self, finished: Vec<Finished>) {
+        crate::history_page::record(self, &finished);
+    }
+
+    fn apply(&mut self, action: Action) {
+        let item = |app: &Self, id| app.downloader.queue().get(id).cloned();
+        match action {
+            Action::Select(id) => self.selected = Some(id),
+            Action::Cancel(id) => self.downloader.cancel(id),
+            Action::Remove(id) => {
+                self.downloader.remove(id);
+                if self.selected == Some(id) {
+                    self.selected = None;
+                }
+            }
+            Action::Retry(id) => self.downloader.retry(id, None),
+            Action::UseCookies(id, browser) => {
+                self.config.options.cookies_from = Some(browser);
+                self.save_config();
+                if let Some(it) = item(self, id) {
+                    let mut options = it.options.clone();
+                    options.cookies_from = Some(browser);
+                    self.downloader.retry(id, Some(options));
+                }
+            }
+            Action::Reveal(id) => {
+                if let Some(it) = item(self, id) {
+                    system::reveal(it.final_path.as_deref().unwrap_or(&it.out_dir));
+                }
+            }
+            Action::Open(id) => {
+                if let Some(path) = item(self, id).and_then(|it| it.final_path) {
+                    system::open(&path);
+                }
+            }
+            Action::CopyCommand(id) => {
+                if let Some(it) = item(self, id) {
+                    let cmd = preview(&it.options).replace("<url>", &shell_quote(&it.url));
+                    self.ctx.copy_text(cmd);
+                }
+            }
+            Action::ShowLog(id) => self.log_for = Some(id),
+        }
+    }
+
+    // ---- view data ----
+
+    fn cookie_fix(&self) -> Fix {
+        self.config
+            .options
+            .cookies_from
+            .filter(|b| self.browsers.contains(b))
+            .or_else(|| self.browsers.first().copied())
+            .map_or(Fix::Retry, Fix::UseCookies)
+    }
+
+    fn row_view(&self, it: &Item) -> RowView {
+        let title = it
+            .info
+            .as_ref()
+            .and_then(|i| i.title.clone())
+            .unwrap_or_else(|| short_url(&it.url));
+        let summary = it.options.summary();
+        let mut meta = vec![summary.clone()];
+        if let Some((i, n)) = it.playlist {
+            meta.push(format!("Video {i} of {n}"));
+        }
+        let state = match &it.status {
+            Status::Queued => {
+                meta.push("Waiting for a free slot".into());
+                RowState::Waiting
+            }
+            Status::Running => match &it.progress {
+                Some(p) => {
+                    if let Some(total) = p.total {
+                        meta.push(format!(
+                            "{} of {}",
+                            human_bytes(p.downloaded as f64),
+                            human_bytes(total as f64)
+                        ));
+                    }
+                    if let Some(s) = p.speed {
+                        meta.push(format!("{}/s", human_bytes(s)));
+                    }
+                    if let Some(e) = p.eta {
+                        meta.push(format!("{} left", human_eta(e)));
+                    }
+                    match p.fraction() {
+                        Some(f) => RowState::Active {
+                            ring: Ring::Progress(f),
+                            percent: Some(format!("{:.0}%", f * 100.0)),
+                        },
+                        None => RowState::Active {
+                            ring: Ring::Spinner,
+                            percent: None,
+                        },
+                    }
+                }
+                None => {
+                    meta.push("Starting…".into());
+                    RowState::Active {
+                        ring: Ring::Spinner,
+                        percent: None,
+                    }
+                }
+            },
+            Status::PostProcessing(step) => {
+                meta.push(match step {
+                    PostStep::Merging => "Merging video and audio…".into(),
+                    PostStep::ExtractingAudio => format!(
+                        "Converting to {}…",
+                        summary.split(" · ").next().unwrap_or("audio")
+                    ),
+                    PostStep::Finishing => "Adding cover art and tags…".into(),
+                });
+                RowState::Active {
+                    ring: Ring::Spinner,
+                    percent: None,
+                }
+            }
+            Status::Done => {
+                if let Some(total) = it.progress.as_ref().and_then(|p| p.total) {
+                    meta.push(human_bytes(total as f64));
+                }
+                meta.push("finished".into());
+                RowState::Done
+            }
+            Status::Cancelled => {
+                meta.push("Cancelled".into());
+                RowState::Cancelled
+            }
+            Status::Failed(kind) => {
+                let (headline, hint, fix) = problem_text(kind, self.cookie_fix());
+                return RowView {
+                    id: it.id,
+                    title: headline.into(),
+                    meta: format!("{hint} · {title}"),
+                    state: RowState::Problem { fix },
+                };
+            }
+        };
+        RowView {
+            id: it.id,
+            title,
+            meta: meta.join(" · "),
+            state,
+        }
+    }
+
+    fn details_view(&self, it: &Item) -> DetailsView {
+        let info = it.info.clone().unwrap_or_default();
+        let mut facts = vec![("Format".to_string(), it.options.summary())];
+        let active = it.status.is_active();
+        if let Some(p) = &it.progress {
+            if let Some(total) = p.total {
+                facts.push(("Size".into(), human_bytes(total as f64)));
+            }
+            if active {
+                if let Some(s) = p.speed {
+                    facts.push(("Speed".into(), format!("{}/s", human_bytes(s))));
+                }
+                if let Some(e) = p.eta {
+                    facts.push(("Time left".into(), human_eta(e)));
+                }
+            }
+        }
+        if let Some(n) = info.playlist_count {
+            facts.push(("Videos".into(), n.to_string()));
+        }
+        if let Status::Failed(ErrorKind::Other(msg)) = &it.status {
+            facts.push(("Error".into(), msg.clone()));
+        }
+        let (path_label, path) = match &it.final_path {
+            Some(p) if it.status == Status::Done => ("Saved to", paths::display(p)),
+            Some(p) => ("Saving to", paths::display(p)),
+            None => ("Saving to", paths::display(&it.out_dir)),
+        };
+        DetailsView {
+            id: it.id,
+            title: info.title.clone().unwrap_or_else(|| short_url(&it.url)),
+            channel: info.uploader.clone(),
+            duration: info.duration.map(human_duration),
+            thumbnail: info.thumbnail.clone(),
+            fraction: if active {
+                it.progress.as_ref().and_then(|p| p.fraction())
+            } else {
+                None
+            },
+            facts,
+            path_label,
+            path,
+            audio: matches!(it.options.mode, Mode::Audio { .. }),
+            stage: match it.status {
+                Status::Done => Stage::Done,
+                Status::Failed(_) | Status::Cancelled => Stage::Stopped,
+                _ => Stage::Working,
+            },
+        }
+    }
+
+    // ---- drawing ----
+
     fn header(&mut self, ui: &mut egui::Ui) {
         let p = palette(ui.ctx());
         let full = ui.max_rect();
         ui.horizontal(|ui| {
             ui.set_height(44.0);
-            // Logo: the download arrow in an inverted rounded square.
-            let (logo, _) = ui.allocate_exact_size(Vec2::splat(30.0), egui::Sense::hover());
+            let (logo, resp) = ui.allocate_exact_size(Vec2::splat(30.0), egui::Sense::click());
             ui.painter()
                 .rect_filled(logo, CornerRadius::same(8), p.text);
             icons::paint(ui.painter(), logo.shrink(7.0), Icon::Download, p.bg);
+            if resp.clicked() {
+                self.page = Page::Downloads;
+            }
             w::text(ui, "YouTube Downloader", 15.0, Weight::SemiBold, p.text);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if w::icon_button(ui, Icon::Sliders, "Settings").clicked() {
-                    // Settings arrive in M5.
+                    self.page = toggle(self.page, Page::Settings);
                 }
                 if w::icon_button(ui, Icon::History, "History").clicked() {
-                    // History arrives in M5.
+                    self.page = toggle(self.page, Page::History);
                 }
                 self.theme_button(ui);
             });
         });
 
-        // The Audio | Video switch sits in the true center of the window.
+        // The Audio | Video switch (or the page title) in the true center.
         let center = Rect::from_center_size(full.center(), vec2(320.0, 44.0));
         ui.scope_builder(UiBuilder::new().max_rect(center), |ui| {
-            w::centered_row(ui, "tabs", |ui| {
-                let mut tab = if self.config.is_video() {
-                    Tab::Video
-                } else {
-                    Tab::Audio
-                };
-                let changed = w::segmented(
-                    ui,
-                    &mut tab,
-                    &[
-                        (Tab::Audio, Icon::Music, "Audio"),
-                        (Tab::Video, Icon::Video, "Video"),
-                    ],
-                );
-                if changed {
-                    self.config.set_video(tab == Tab::Video);
-                    self.save_config();
+            w::centered_row(ui, "tabs", |ui| match self.page {
+                Page::Downloads => {
+                    let mut tab = if self.config.is_video() {
+                        Tab::Video
+                    } else {
+                        Tab::Audio
+                    };
+                    let changed = w::segmented(
+                        ui,
+                        &mut tab,
+                        &[
+                            (Tab::Audio, Icon::Music, "Audio"),
+                            (Tab::Video, Icon::Video, "Video"),
+                        ],
+                    );
+                    if changed {
+                        self.config.set_video(tab == Tab::Video);
+                        self.save_config();
+                    }
+                }
+                Page::History | Page::Settings => {
+                    if w::button(
+                        ui,
+                        Kind::Secondary,
+                        Some(Icon::Download),
+                        "Back to downloads",
+                        40.0,
+                    )
+                    .clicked()
+                    {
+                        self.page = Page::Downloads;
+                    }
                 }
             });
         });
     }
 
-    /// Cycles System → Light → Dark. The Settings page will also offer it.
+    /// Cycles System → Light → Dark. Settings offers the same choice.
     fn theme_button(&mut self, ui: &mut egui::Ui) {
         let current = self.theme_override.unwrap_or(self.config.theme);
         let (icon, name) = match current {
@@ -144,19 +475,16 @@ impl App {
         };
         let label = format!("Theme: {name} (click to change)");
         if w::icon_button(ui, icon, &label).clicked() {
-            let next = match current {
+            self.set_theme(match current {
                 ThemeSetting::System => ThemeSetting::Light,
                 ThemeSetting::Light => ThemeSetting::Dark,
                 ThemeSetting::Dark => ThemeSetting::System,
-            };
-            self.theme_override = None;
-            self.config.theme = next;
-            theme::apply_setting(ui.ctx(), next);
-            self.save_config();
+            });
         }
     }
 
     fn add_section(&mut self, ui: &mut egui::Ui) {
+        let p = palette(ui.ctx());
         let paste_hint = if cfg!(target_os = "macos") {
             "⌘V adds instantly"
         } else {
@@ -165,8 +493,18 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.set_max_width(820.0);
             let field = w::link_field(ui, &mut self.link, paste_hint);
-            if field.submitted && !self.link.trim().is_empty() {
-                // The queue is connected in M4.
+            if field.submitted {
+                let text = std::mem::take(&mut self.link);
+                if !text.trim().is_empty() {
+                    self.add_links(&text);
+                    if self.link_error.is_some() {
+                        self.link = text;
+                    }
+                }
+            }
+            if let Some(err) = &self.link_error {
+                ui.add_space(6.0);
+                w::text(ui, err, 12.0, Weight::Regular, p.danger);
             }
         });
         ui.add_space(14.0);
@@ -192,13 +530,12 @@ impl App {
                     w::divider(ui);
                     w::chip_label(ui, "Format");
                     for c in Container::ALL {
-                        if w::chip(
-                            ui,
-                            &c.as_str().to_uppercase().replace("WEBM", "WebM"),
-                            c == container,
-                        )
-                        .clicked()
-                        {
+                        let label = if c == Container::Webm {
+                            "WebM".into()
+                        } else {
+                            c.as_str().to_uppercase()
+                        };
+                        if w::chip(ui, &label, c == container).clicked() {
                             self.config.options.mode = Mode::Video {
                                 resolution,
                                 container: c,
@@ -212,12 +549,14 @@ impl App {
                 w::centered_row(ui, "audio-choices", |ui| {
                     w::chip_label(ui, "Format");
                     for f in AudioFormat::ALL {
-                        if f == AudioFormat::Vorbis {
-                            continue; // still available from Settings
+                        // Vorbis stays selectable in Settings but is rarely wanted.
+                        if f == AudioFormat::Vorbis && format != AudioFormat::Vorbis {
+                            continue;
                         }
                         let label = match f {
                             AudioFormat::Best => "Original".to_string(),
                             AudioFormat::Opus => "Opus".to_string(),
+                            AudioFormat::Vorbis => "Vorbis".to_string(),
                             other => other.as_str().to_uppercase(),
                         };
                         if w::chip(ui, &label, f == format).clicked() {
@@ -225,7 +564,7 @@ impl App {
                             changed = true;
                         }
                     }
-                    if !format.is_lossless() {
+                    if !format.is_lossless() && format != AudioFormat::Best {
                         w::divider(ui);
                         w::chip_label(ui, "Bitrate");
                         for q in
@@ -245,14 +584,14 @@ impl App {
         let video = self.config.is_video();
         w::centered_row(ui, "extras", |ui| {
             let o = &mut self.config.options;
-            for (label, value) in [
+            let mut toggles = vec![
                 ("Single video, skip playlist", &mut o.no_playlist),
                 ("Cover art", &mut o.embed_thumbnail),
-                ("Subtitles", &mut o.embed_subs),
-            ] {
-                if label == "Subtitles" && !video {
-                    continue;
-                }
+            ];
+            if video {
+                toggles.push(("Subtitles", &mut o.embed_subs));
+            }
+            for (label, value) in toggles {
                 let text = format!("{label} · {}", if *value { "on" } else { "off" });
                 if w::chip(ui, &text, false).clicked() {
                     *value = !*value;
@@ -265,25 +604,44 @@ impl App {
         }
     }
 
-    fn queue(&mut self, ui: &mut egui::Ui) {
+    fn rows(&self) -> Vec<RowView> {
+        if self.demo {
+            return crate::demo::rows();
+        }
+        self.downloader
+            .queue()
+            .items()
+            .iter()
+            .map(|it| self.row_view(it))
+            .collect()
+    }
+
+    fn details(&self) -> Option<DetailsView> {
+        if self.demo {
+            return Some(crate::demo::details());
+        }
+        let id = self.selected?;
+        self.downloader
+            .queue()
+            .get(id)
+            .map(|it| self.details_view(it))
+    }
+
+    fn queue(&mut self, ui: &mut egui::Ui, rows: &[RowView], actions: &mut Vec<Action>) {
         let p = palette(ui.ctx());
+        let counts = self.downloader.queue().counts();
+        let (active, waiting) = if self.demo {
+            (2, 1)
+        } else {
+            (counts.active, counts.queued)
+        };
         ui.horizontal(|ui| {
             ui.add_space(14.0);
             w::text(ui, "Queue", 14.0, Weight::SemiBold, p.text);
-            let active = self
-                .rows
-                .iter()
-                .filter(|r| matches!(r.state, RowState::Downloading { .. }))
-                .count();
-            let waiting = self
-                .rows
-                .iter()
-                .filter(|r| matches!(r.state, RowState::Waiting))
-                .count();
             w::text(
                 ui,
                 &format!(
-                    "{active} of {} slots active · {waiting} waiting",
+                    "{active} of {} downloading · {waiting} waiting",
                     self.config.max_parallel
                 ),
                 12.0,
@@ -291,242 +649,240 @@ impl App {
                 p.faint,
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                w::button(ui, Kind::Ghost, None, "Pause all", 36.0);
+                if active + waiting > 0
+                    && w::button(ui, Kind::Ghost, None, "Cancel all", 36.0).clicked()
+                {
+                    self.downloader.cancel_all();
+                }
+                let finished = counts.done + counts.failed + counts.cancelled;
+                if finished > 0
+                    && w::button(ui, Kind::Ghost, None, "Clear finished", 36.0).clicked()
+                {
+                    self.downloader.clear_finished();
+                    if self
+                        .selected
+                        .is_some_and(|id| self.downloader.queue().get(id).is_none())
+                    {
+                        self.selected = None;
+                    }
+                }
             });
         });
         ui.add_space(4.0);
 
-        if self.rows.is_empty() {
-            self.empty_state(ui);
+        if rows.is_empty() {
+            empty_state(ui);
             return;
         }
-        for i in 0..self.rows.len() {
-            self.row(ui, i);
+        let selected = self
+            .selected
+            .or(if self.demo { Some(rows[0].id) } else { None });
+        for row in rows {
+            let resp = views::row(
+                ui,
+                row,
+                selected == Some(row.id),
+                self.hovered == Some(row.id),
+                actions,
+            );
+            if resp.clicked() {
+                actions.push(Action::Select(row.id));
+            }
+            if resp.hovered() {
+                self.hovered_next = Some(row.id);
+                if self.hovered != self.hovered_next {
+                    ui.ctx().request_repaint();
+                }
+            }
             ui.add_space(4.0);
         }
     }
 
-    fn empty_state(&self, ui: &mut egui::Ui) {
-        let p = palette(ui.ctx());
-        w::card(Color32::TRANSPARENT, p.border, radius::CARD)
-            .inner_margin(Margin::symmetric(24, 40))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.vertical_centered(|ui| {
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::hover());
-                    icons::paint(ui.painter(), r, Icon::Download, p.faint);
-                    ui.add_space(6.0);
-                    w::text(
-                        ui,
-                        "Your downloads will appear here",
-                        15.0,
-                        Weight::SemiBold,
-                        p.text,
-                    );
-                    w::text(
-                        ui,
-                        "Paste one or more links above to get started.",
-                        13.0,
-                        Weight::Regular,
-                        p.muted,
-                    );
-                });
-            });
-    }
-
-    fn row(&mut self, ui: &mut egui::Ui, i: usize) {
-        let p = palette(ui.ctx());
-        let row = self.rows[i].clone();
-        let selected = i == self.selected;
-        let warning = matches!(row.state, RowState::NeedsCookies);
-        let (fill, border) = if warning {
-            (p.warn_bg, p.warn_border)
-        } else if selected {
-            (p.surface, p.selected_border)
-        } else if self.hovered == Some(i) {
-            (p.surface, Color32::TRANSPARENT)
-        } else {
-            (Color32::TRANSPARENT, Color32::TRANSPARENT)
-        };
-        let resp = w::card(fill, border, radius::CARD)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    match &row.state {
-                        RowState::Downloading { fraction, .. } => {
-                            w::progress_ring(ui, Some(*fraction), 44.0);
-                        }
-                        RowState::Waiting => {
-                            w::progress_ring(ui, None, 44.0);
-                        }
-                        RowState::Done => w::badge(ui, Badge::Done, 44.0),
-                        RowState::NeedsCookies => w::badge(ui, Badge::Warning, 44.0),
+    fn downloads_page(&mut self, ui: &mut egui::Ui) {
+        self.add_section(ui);
+        ui.add_space(24.0);
+        let rows = self.rows();
+        let details = self.details();
+        let mut actions = Vec::new();
+        let wide = ui.available_width() >= 900.0 && details.is_some();
+        if wide {
+            let side = 340.0;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 20.0;
+                // Leave room for the scroll bar on the right.
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width() - side - 32.0, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| self.queue(ui, &rows, &mut actions),
+                );
+                ui.allocate_ui_with_layout(vec2(side, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(side);
+                    if let Some(d) = &details {
+                        views::details(ui, d, &mut actions);
                     }
-                    let right_w = match row.state {
-                        RowState::Done => 150.0,
-                        RowState::NeedsCookies => 200.0,
-                        _ => 110.0,
-                    };
-                    ui.allocate_ui(vec2(ui.available_width() - right_w, 44.0), |ui| {
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 3.0;
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&row.title)
-                                        .font(theme::font(14.0, Weight::SemiBold)),
-                                )
-                                .truncate(),
-                            );
-                            let meta_color = if warning { p.warn_text } else { p.faint };
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&row.meta)
-                                        .font(theme::font(12.0, Weight::Regular))
-                                        .color(meta_color),
-                                )
-                                .truncate(),
-                            );
-                        });
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        match &row.state {
-                            RowState::Downloading { percent, .. } => {
-                                w::icon_button(ui, Icon::Pause, "Pause");
-                                w::text(ui, percent, 13.0, Weight::SemiBold, p.text);
-                            }
-                            RowState::Waiting => {
-                                w::icon_button(ui, Icon::Close, "Remove");
-                            }
-                            RowState::Done => {
-                                w::button(ui, Kind::Secondary, None, "Show in folder", 36.0);
-                            }
-                            RowState::NeedsCookies => {
-                                w::button(ui, Kind::Warning, None, "Use Firefox cookies", 36.0);
-                            }
-                        }
-                    });
-                });
-            })
-            .response;
-        if selected && !warning {
-            ui.painter().rect_stroke(
-                resp.rect.expand(1.0),
-                CornerRadius::same(radius::CARD + 1),
-                stroke(3.0, p.selected_glow),
-                egui::StrokeKind::Outside,
-            );
-        }
-        let click = ui.interact(resp.rect, ui.id().with(("row", i)), egui::Sense::click());
-        if click.clicked() {
-            self.selected = i;
-        }
-        if click.hovered() {
-            self.hovered_next = Some(i);
-        }
-        if self.hovered != self.hovered_next && self.hovered_next == Some(i) {
-            ui.ctx().request_repaint();
-        }
-    }
-
-    fn details(&self, ui: &mut egui::Ui) {
-        let p = palette(ui.ctx());
-        let Some(row) = self.rows.get(self.selected) else {
-            return;
-        };
-        w::card(p.surface, p.border, radius::PANEL)
-            .inner_margin(Margin::same(16))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 14.0;
-                // Thumbnail placeholder until real thumbnails load (M4).
-                let w_avail = ui.available_width();
-                let (thumb, _) = ui
-                    .allocate_exact_size(vec2(w_avail, w_avail * 9.0 / 16.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(thumb, CornerRadius::same(12), p.track);
-                let badge =
-                    Rect::from_min_size(thumb.right_bottom() - vec2(52.0, 30.0), vec2(42.0, 20.0));
-                ui.painter().rect_filled(
-                    badge,
-                    CornerRadius::same(6),
-                    Color32::from_black_alpha(190),
-                );
-                w::paint_text(
-                    ui,
-                    badge.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "12:48",
-                    11.0,
-                    Weight::SemiBold,
-                    Color32::WHITE,
-                );
-
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    w::text(ui, &row.title, 16.0, Weight::SemiBold, p.text);
-                    w::text(ui, "[Channel]", 12.0, Weight::Regular, p.faint);
-                });
-                if let RowState::Downloading { fraction, .. } = row.state {
-                    w::progress_bar(ui, fraction);
-                }
-                for pair in [
-                    [
-                        ("Quality", "1080p · 60 fps"),
-                        ("Format", "MP4 · H.264 + AAC"),
-                    ],
-                    [("Size", "248 MB"), ("Speed", "12.4 MB/s")],
-                ] {
-                    ui.columns(2, |cols| {
-                        for (col, (k, v)) in cols.iter_mut().zip(pair) {
-                            col.spacing_mut().item_spacing.y = 2.0;
-                            w::text(col, k, 12.0, Weight::Regular, p.faint);
-                            w::text(col, v, 13.0, Weight::Medium, p.text);
-                        }
-                    });
-                }
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 6.0;
-                    w::text(ui, "Saving to", 12.0, Weight::Regular, p.faint);
-                    let dir = paths::display(&self.config.out_dir(&self.default_dirs));
-                    w::mono_box(ui, &format!("{dir}/[Video title].mp4"));
-                });
-                ui.horizontal(|ui| {
-                    w::button(ui, Kind::Secondary, Some(Icon::Copy), "Copy command", 40.0);
-                    w::button(ui, Kind::Danger, None, "Cancel", 40.0);
                 });
             });
+        } else {
+            self.queue(ui, &rows, &mut actions);
+            if let Some(d) = &details {
+                ui.add_space(16.0);
+                views::details(ui, d, &mut actions);
+            }
+        }
+        if !self.demo {
+            for a in actions {
+                self.apply(a);
+            }
+        }
     }
 
-    fn footer(&self, ui: &mut egui::Ui) {
+    fn footer(&mut self, ui: &mut egui::Ui) {
         let p = palette(ui.ctx());
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::hover());
             icons::paint(ui.painter(), r, Icon::Folder, p.muted);
-            let dir = paths::display(&self.config.out_dir(&self.default_dirs));
-            w::text(ui, &dir, 12.0, Weight::Regular, p.muted);
+            let dir = self.config.out_dir(&self.default_dirs);
+            let resp = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(paths::display(&dir))
+                        .font(theme::font(12.0, Weight::Regular))
+                        .color(p.muted),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if resp
+                .on_hover_text("Open folder")
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                system::reveal(&dir);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                if ui
-                    .link(egui::RichText::new("Show log").font(theme::font(12.0, Weight::Medium)))
-                    .clicked()
+                let log_target = self
+                    .selected
+                    .or_else(|| self.downloader.queue().items().last().map(|i| i.id));
+                if let Some(id) = log_target
+                    && ui
+                        .link(
+                            egui::RichText::new("Show log").font(theme::font(12.0, Weight::Medium)),
+                        )
+                        .clicked()
                 {
-                    // The log view arrives with the real queue (M4).
+                    self.log_for = Some(id);
                 }
                 ui.add_space(10.0);
-                // Real tool status is connected in M4.
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    w::status_dot(ui, true, "yt-dlp up to date");
+                    let t = &self.tools;
+                    let ytdlp = if t.updating {
+                        (false, "Updating yt-dlp…".to_string())
+                    } else if t.ytdlp.is_none() {
+                        (false, "yt-dlp missing".to_string())
+                    } else if t.update_error.is_some() {
+                        (false, "yt-dlp update failed".to_string())
+                    } else {
+                        (
+                            true,
+                            t.ytdlp_version
+                                .as_ref()
+                                .map_or("yt-dlp ready".into(), |v| format!("yt-dlp {v}")),
+                        )
+                    };
+                    w::status_dot(ui, ytdlp.0, &ytdlp.1);
                     ui.add_space(10.0);
-                    w::status_dot(ui, true, "ffmpeg ready");
+                    let ff = self.tools.ffmpeg.is_some();
+                    w::status_dot(ui, ff, if ff { "ffmpeg ready" } else { "ffmpeg missing" });
                 });
             });
         });
+    }
+
+    fn log_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.log_for else { return };
+        let p = palette(ctx);
+        let lines: Vec<String> = self.downloader.log(id).cloned().collect();
+        let mut open = true;
+        egui::Window::new("Log")
+            .open(&mut open)
+            .default_size([760.0, 420.0])
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if w::button(ui, Kind::Secondary, Some(Icon::Copy), "Copy all", 34.0).clicked()
+                    {
+                        ctx.copy_text(lines.join("\n"));
+                    }
+                    w::text(
+                        ui,
+                        &format!("{} lines", lines.len()),
+                        12.0,
+                        Weight::Regular,
+                        p.faint,
+                    );
+                });
+                ui.add_space(6.0);
+                egui::ScrollArea::both()
+                    .stick_to_bottom(true)
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        if lines.is_empty() {
+                            w::text(ui, "Nothing yet.", 12.0, Weight::Regular, p.faint);
+                        }
+                        for l in &lines {
+                            ui.label(
+                                egui::RichText::new(l)
+                                    .font(theme::mono(12.0))
+                                    .color(p.muted),
+                            );
+                        }
+                    });
+            });
+        if !open {
+            self.log_for = None;
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum Page {
+    #[default]
+    Downloads,
+    History,
+    Settings,
+}
+
+fn toggle(current: Page, target: Page) -> Page {
+    if current == target {
+        Page::Downloads
+    } else {
+        target
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_tools();
+        let finished = self.downloader.tick();
+        if !finished.is_empty() {
+            self.on_finished(finished);
+        }
+
+        // Paste anywhere (when no text field has focus) adds the links at once.
+        if self.page == Page::Downloads && ctx.memory(|m| m.focused().is_none()) {
+            let pasted: Vec<String> = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Paste(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            for text in pasted {
+                self.add_links(&text);
+            }
+        }
+
         let p = palette(ctx);
         egui::TopBottomPanel::top("header")
             .frame(
@@ -553,38 +909,97 @@ impl eframe::App for App {
                 self.hovered = self.hovered_next.take();
                 egui::ScrollArea::vertical()
                     .auto_shrink(false)
-                    .show(ui, |ui| {
-                        self.add_section(ui);
-                        ui.add_space(24.0);
-                        let wide = ui.available_width() >= 900.0 && !self.rows.is_empty();
-                        if wide {
-                            let side = 340.0;
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 20.0;
-                                ui.allocate_ui(
-                                    // Leave room for the scroll bar on the right.
-                                    vec2(ui.available_width() - side - 32.0, 0.0),
-                                    |ui| {
-                                        ui.vertical(|ui| self.queue(ui));
-                                    },
-                                );
-                                ui.allocate_ui_with_layout(
-                                    vec2(side, 0.0),
-                                    Layout::top_down(Align::Min),
-                                    |ui| {
-                                        ui.set_width(side);
-                                        self.details(ui);
-                                    },
-                                );
-                            });
-                        } else {
-                            self.queue(ui);
-                            if !self.rows.is_empty() {
-                                ui.add_space(16.0);
-                                self.details(ui);
-                            }
-                        }
+                    .show(ui, |ui| match self.page {
+                        Page::Downloads => self.downloads_page(ui),
+                        Page::History => crate::history_page::show(self, ui),
+                        Page::Settings => crate::settings_page::show(self, ui),
                     });
             });
+        self.log_window(ctx);
+    }
+}
+
+fn empty_state(ui: &mut egui::Ui) {
+    let p = palette(ui.ctx());
+    w::card(Color32::TRANSPARENT, p.border, radius::CARD)
+        .inner_margin(Margin::symmetric(24, 40))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.vertical_centered(|ui| {
+                let (r, _) = ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::hover());
+                icons::paint(ui.painter(), r, Icon::Download, p.faint);
+                ui.add_space(6.0);
+                w::text(
+                    ui,
+                    "Your downloads will appear here",
+                    15.0,
+                    Weight::SemiBold,
+                    p.text,
+                );
+                w::text(
+                    ui,
+                    "Paste one or more links above to get started.",
+                    13.0,
+                    Weight::Regular,
+                    p.muted,
+                );
+            });
+        });
+}
+
+/// `https://www.youtube.com/watch?v=x` → `youtube.com/watch?v=x`, for rows without a title yet.
+fn short_url(url: &str) -> String {
+    let s = url.split_once("://").map_or(url, |(_, rest)| rest);
+    s.strip_prefix("www.").unwrap_or(s).to_string()
+}
+
+/// Headline, hint and suggested fix for a failed download.
+fn problem_text(kind: &ErrorKind, cookie_fix: Fix) -> (&'static str, String, Fix) {
+    match kind {
+        ErrorKind::BotCheck => (
+            "YouTube wants you signed in",
+            "Use your browser's cookies to continue".into(),
+            cookie_fix,
+        ),
+        ErrorKind::SignInRequired => (
+            "This video needs a signed-in account",
+            "Sign in in your browser, then use its cookies".into(),
+            cookie_fix,
+        ),
+        ErrorKind::Private => (
+            "This video is private",
+            "Only its owner can share it".into(),
+            Fix::None,
+        ),
+        ErrorKind::Unavailable => (
+            "This video is unavailable",
+            "It may have been removed".into(),
+            Fix::None,
+        ),
+        ErrorKind::UnsupportedUrl => (
+            "This link isn't supported",
+            "Check the address and try again".into(),
+            Fix::None,
+        ),
+        ErrorKind::MissingFfmpeg => (
+            "ffmpeg is missing",
+            "Reinstall the app, or set ffmpeg in Settings".into(),
+            Fix::Retry,
+        ),
+        ErrorKind::MissingYtDlp => (
+            "yt-dlp is missing",
+            "Update it from Settings, then retry".into(),
+            Fix::Retry,
+        ),
+        ErrorKind::Network => (
+            "Network problem",
+            "Check your connection and retry".into(),
+            Fix::Retry,
+        ),
+        ErrorKind::Other(_) => (
+            "Download failed",
+            "See the log for details".into(),
+            Fix::Retry,
+        ),
     }
 }
