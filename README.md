@@ -10,10 +10,12 @@ A fast, native desktop app for downloading audio and video with
 [egui](https://github.com/emilk/egui). It replaces the earlier Python app,
 [genetzhs/youtubeDL](https://github.com/genetzhs/youtubeDL).
 
-![Main window](docs/screenshots/main-window.png)
+| Dark | Light |
+|---|---|
+| ![Main window, dark theme, audio mode](docs/screenshots/main-dark.png) | ![Main window, light theme, video mode](docs/screenshots/main-light.png) |
 
-> **Note:** The app is still being built. The screenshot shows the final design, not a
-> build you can run yet. See [Status](#status).
+> **Note:** The app is still being built. These are screenshots of the current build with
+> sample queue items (`--demo`); downloading from the window arrives in M4. See [Status](#status).
 
 ## Features
 
@@ -30,6 +32,8 @@ A fast, native desktop app for downloading audio and video with
   updates itself (checksum-verified) because YouTube changes often.
 - **Shows the exact command** it runs, with a copy button, and a log for every download.
 - **History** of finished downloads, and a desktop notification when the queue is done.
+- **Dark and light themes**, or follow the system setting. Switch with the sun/moon button
+  in the top right.
 
 ## Install
 
@@ -115,14 +119,15 @@ Deleting these folders resets the app.
 |---|---|---|
 | M1 | `ytdl-core`: command builder, progress parser, queue, settings, history, tool lookup | ✅ done |
 | M2 | `ytdl-runner`: run yt-dlp, live progress, cancel, two at a time, yt-dlp self-update | ✅ done |
-| M3 | Dark theme and custom egui widgets | next |
-| M4 | Main window: link field, Audio/Video, quality chips, queue, details panel | |
+| M3 | Window, dark and light themes, custom widgets | ✅ done |
+| M4 | Connect the window to the queue: real downloads, thumbnails, log | next |
 | M5 | Settings, history, notifications | |
 | M6 | Packages: `.deb`, AppImage, macOS `.dmg`, release workflow | |
 
 ## Build from source
 
-You need [Rust](https://rustup.rs) 1.88 or newer.
+You need [Rust](https://rustup.rs) 1.88 or newer. On Linux the window also needs
+`libxkbcommon-x11-0`, which desktop systems normally have already.
 
 ```bash
 git clone https://github.com/genetzhs/Youtube-downloader.git
@@ -130,8 +135,15 @@ cd Youtube-downloader
 cargo test
 ```
 
-Until the window is ready (M4), you can try the download engine from the terminal. It uses
-`yt-dlp` and `ffmpeg` from your `PATH`:
+Run the app (add `--demo` to fill the queue with sample items, `--theme dark|light` to
+force a theme):
+
+```bash
+cargo run -p youtube-downloader -- --demo
+```
+
+Until the window starts downloads (M4), you can try the download engine from the terminal.
+It uses `yt-dlp` and `ffmpeg` from your `PATH`:
 
 ```bash
 cargo run -p ytdl-runner --example cli -- "https://www.youtube.com/watch?v=<id>" --out ~/Downloads
@@ -142,6 +154,8 @@ cargo run -p ytdl-runner --example cli -- "https://www.youtube.com/watch?v=<id>"
 
 ```
 crates/
+  app/           The egui window: theme, widgets, layout. Builds the
+                 `youtube-downloader` binary.
   ytdl-core/     Logic with no UI: yt-dlp arguments, output parsing, queue,
                  settings, history, finding tools. Fully unit tested.
   ytdl-runner/   Runs yt-dlp processes for the queue and updates yt-dlp.
@@ -160,7 +174,8 @@ cargo test -p ytdl-runner -- --ignored   # also downloads the real yt-dlp from G
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). The Geist fonts in `crates/app/fonts` are under the
+SIL Open Font License (`crates/app/fonts/OFL.txt`).
 
 The packages also contain third-party programs under their own licenses:
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [FFmpeg](https://ffmpeg.org)
