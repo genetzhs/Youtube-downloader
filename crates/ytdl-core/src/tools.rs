@@ -139,8 +139,11 @@ fn is_executable(p: &Path) -> bool {
 pub mod ytdlp_release {
     use super::*;
 
-    pub const BASE_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/";
-    pub const LATEST_API: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
+    /// Redirects to `…/releases/download/<tag>/SHA2-256SUMS`, which tells us the
+    /// latest version without the rate-limited GitHub API.
+    pub const LATEST_CHECKSUMS_URL: &str =
+        "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS";
+    const DOWNLOAD_BASE: &str = "https://github.com/yt-dlp/yt-dlp/releases/download/";
 
     /// The release file for this platform (`std::env::consts::{OS, ARCH}`).
     pub fn asset_name(os: &str, arch: &str) -> Option<&'static str> {
@@ -153,12 +156,20 @@ pub mod ytdlp_release {
         }
     }
 
-    pub fn asset_url(asset: &str) -> String {
-        format!("{BASE_URL}{asset}")
+    /// A file of release `tag`, so the checksum list and the binary always
+    /// come from the same release.
+    pub fn file_url(tag: &str, file: &str) -> String {
+        format!("{DOWNLOAD_BASE}{tag}/{file}")
     }
 
-    pub fn checksums_url() -> String {
-        format!("{BASE_URL}SHA2-256SUMS")
+    /// Reads the tag from the redirect target of [`LATEST_CHECKSUMS_URL`].
+    pub fn tag_from_redirect(location: &str) -> Option<String> {
+        let rest = location.split("/releases/download/").nth(1)?;
+        let tag = rest.split('/').next()?;
+        let valid = tag.starts_with(|c: char| c.is_ascii_digit())
+            && !tag.contains("..")
+            && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '.');
+        valid.then(|| tag.to_string())
     }
 
     /// Finds the hash for `asset` in a `SHA2-256SUMS` file (`<hex>  <name>` lines).
@@ -173,12 +184,6 @@ pub mod ytdlp_release {
 
     pub fn sha256_matches(bytes: &[u8], expected_hex: &str) -> bool {
         hex::encode(Sha256::digest(bytes)) == expected_hex.to_ascii_lowercase()
-    }
-
-    /// Reads `tag_name` from the GitHub "latest release" JSON, e.g. `2026.10.10`.
-    pub fn latest_tag(json: &str) -> Option<String> {
-        let v: serde_json::Value = serde_json::from_str(json).ok()?;
-        v.get("tag_name")?.as_str().map(str::to_string)
     }
 
     /// yt-dlp versions are dates (`2026.10.10`, sometimes `.1` suffixed), so
@@ -284,7 +289,10 @@ mod tests {
         assert_eq!(asset_name("linux", "aarch64"), Some("yt-dlp_linux_aarch64"));
         assert_eq!(asset_name("macos", "aarch64"), Some("yt-dlp_macos"));
         assert_eq!(asset_name("windows", "x86_64"), None);
-        assert_eq!(asset_url("yt-dlp_linux"), format!("{BASE_URL}yt-dlp_linux"));
+        assert_eq!(
+            file_url("2026.10.21", "yt-dlp_linux"),
+            "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/yt-dlp_linux"
+        );
     }
 
     #[test]
@@ -304,9 +312,14 @@ mod tests {
     #[test]
     fn versions() {
         assert_eq!(
-            latest_tag(r#"{"tag_name":"2026.10.10","x":1}"#).as_deref(),
-            Some("2026.10.10")
+            tag_from_redirect(
+                "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/SHA2-256SUMS"
+            )
+            .as_deref(),
+            Some("2026.10.21")
         );
+        assert_eq!(tag_from_redirect("https://github.com/login"), None);
+        assert_eq!(tag_from_redirect("/releases/download/../x"), None);
         assert!(is_newer("2026.10.10", "2026.09.30"));
         assert!(is_newer("2026.10.10.1", "2026.10.10"));
         assert!(!is_newer("2026.10.10", "2026.10.10"));

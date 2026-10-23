@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ytdl-core"]
+members = ["crates/ytdl-core", "crates/ytdl-runner"]
 
 [workspace.package]
 edition = "2024"
