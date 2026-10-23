@@ -16,7 +16,7 @@ A fast, native desktop app for downloading audio and video with
 | ![Settings page, dark theme](docs/screenshots/settings.png) | ![History page, light theme](docs/screenshots/history.png) |
 
 > The dark screenshot shows two real downloads; the light one uses sample queue items
-> (`--demo`) to show every state at once. Packages are not published yet, see [Status](#status).
+> (`--demo`) to show every state at once.
 
 ## Features
 
@@ -38,19 +38,29 @@ A fast, native desktop app for downloading audio and video with
 
 ## Install
 
-Packages will be published on the [Releases](https://github.com/genetzhs/Youtube-downloader/releases)
-page with the first release. Until then, see [Build from source](#build-from-source).
+Download the file for your system from the
+[Releases](https://github.com/genetzhs/Youtube-downloader/releases) page. Everything the app
+needs (yt-dlp, ffmpeg, ffprobe) is inside; nothing else to install.
 
-### Linux: .deb (Debian, Ubuntu, Linux Mint, Pop!_OS)
+| System | File |
+|---|---|
+| Ubuntu, Debian, Linux Mint, Pop!_OS (Ubuntu 22.04 / Debian 12 or newer) | `youtube-downloader_<version>_amd64.deb` |
+| Any other Linux (x86_64) | `YouTube_Downloader-<version>-x86_64.AppImage` |
+| Mac with Apple Silicon (M1 and newer) | `YouTube_Downloader-<version>-macos-arm64.dmg` |
+| Mac with Intel | `YouTube_Downloader-<version>-macos-x86_64.dmg` |
+
+Each release also lists `SHA256SUMS` to check the downloads.
+
+### Linux: .deb
 
 ```bash
 sudo apt install ./youtube-downloader_<version>_amd64.deb
 ```
 
-Then open **YouTube Downloader** from your applications menu, or run `youtube-downloader`.
+Open **YouTube Downloader** from the applications menu, or run `youtube-downloader`.
 To remove it: `sudo apt remove youtube-downloader`.
 
-### Linux: AppImage (any distribution)
+### Linux: AppImage
 
 ```bash
 chmod +x YouTube_Downloader-<version>-x86_64.AppImage
@@ -58,12 +68,13 @@ chmod +x YouTube_Downloader-<version>-x86_64.AppImage
 ```
 
 If it does not start, your system may be missing FUSE 2: install `libfuse2`
-(on Ubuntu 24.04 and newer: `sudo apt install libfuse2t64`).
+(on Ubuntu 24.04 and newer: `sudo apt install libfuse2t64`), or run it with
+`--appimage-extract-and-run`.
 
-### macOS (Apple Silicon and Intel)
+### macOS
 
-1. Open the `.dmg` and drag **YouTube Downloader** into **Applications**.
-2. The first time, macOS may say the app "cannot be opened" because it is not notarized by
+1. Open the `.dmg` and drag **YouTube Downloader** onto **Applications**.
+2. The first time, macOS says the app "cannot be opened" because it is not notarized by
    Apple. Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
    Or run:
 
@@ -129,7 +140,7 @@ Deleting these folders resets the app.
 | M3 | Window, dark and light themes, custom widgets | ✅ done |
 | M4 | Real downloads from the window: queue, thumbnails, details, log, cookie retry | ✅ done |
 | M5 | Settings, history, notifications | ✅ done |
-| M6 | Packages: `.deb`, AppImage, macOS `.dmg`, release workflow | next |
+| M6 | Packages: `.deb`, AppImage, macOS `.dmg`, release workflow | ✅ done |
 
 ## Build from source
 
@@ -168,6 +179,7 @@ crates/
                  settings, history, finding tools. Fully unit tested.
   ytdl-runner/   Runs yt-dlp processes for the queue and updates yt-dlp.
 assets/          App icons
+packaging/       Scripts and files for .deb, AppImage and macOS packages
 docs/            Screenshots
 ```
 
@@ -180,6 +192,22 @@ cargo test
 cargo test -p ytdl-runner -- --ignored   # also downloads the real yt-dlp from GitHub
 ```
 
+### Packages
+
+```bash
+packaging/fetch-tools.sh linux-x64 packaging/build/linux-x64   # yt-dlp + ffmpeg, checksum-verified
+cargo build --release -p youtube-downloader
+cargo deb -p youtube-downloader --no-build                       # needs `cargo install cargo-deb`
+packaging/linux/build-appimage.sh target/release/youtube-downloader packaging/build/linux-x64 out.AppImage
+# on a Mac:
+packaging/macos/build-app.sh target/release/youtube-downloader packaging/build/macos-arm64 0.1.0 out.dmg
+```
+
+To publish a release, set the version in `crates/app/Cargo.toml`, then push a matching tag
+(`git tag v0.1.0 && git push origin v0.1.0`). The **Release** workflow builds all packages and
+attaches them to a GitHub release. Running the workflow by hand builds the packages without
+publishing.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). The Geist fonts in `crates/app/fonts` are under the
@@ -187,7 +215,8 @@ SIL Open Font License (`crates/app/fonts/OFL.txt`).
 
 The packages also contain third-party programs under their own licenses:
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [FFmpeg](https://ffmpeg.org)
-(GPL). Each release lists the exact builds and links to their source code.
+(GPL v3). See [packaging/THIRD-PARTY-NOTICES.md](packaging/THIRD-PARTY-NOTICES.md) for the
+exact builds and where to get their source code.
 
 This app is not affiliated with YouTube or Google. Download only content you have the
 right to download.
