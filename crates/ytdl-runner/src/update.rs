@@ -10,7 +10,7 @@ use ytdl_core::tools::ytdlp_release as release;
 
 /// Generous: the standalone builds are ~35 MB.
 const MAX_DOWNLOAD: u64 = 200 * 1024 * 1024;
-const USER_AGENT: &str = concat!("youtube-downloader/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("youtube-downloader/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
@@ -22,7 +22,7 @@ pub enum UpdateError {
     Checksum,
     #[error("the checksum list does not mention {0}")]
     NoChecksum(String),
-    #[error("could not save yt-dlp: {0}")]
+    #[error("could not save the download: {0}")]
     Io(#[from] std::io::Error),
 }
 
@@ -52,13 +52,13 @@ pub fn installed_version(ytdlp: &Path) -> Option<String> {
 
 /// The system's certificates, so downloads also work behind proxies that the
 /// user's machine trusts (common on company networks).
-fn tls() -> ureq::tls::TlsConfig {
+pub(crate) fn tls() -> ureq::tls::TlsConfig {
     ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build()
 }
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .tls_config(tls())
         .timeout_global(Some(Duration::from_secs(300)))
@@ -66,7 +66,7 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, UpdateError> {
+pub(crate) fn get_text(agent: &ureq::Agent, url: &str) -> Result<String, UpdateError> {
     Ok(agent
         .get(url)
         .header("User-Agent", USER_AGENT)

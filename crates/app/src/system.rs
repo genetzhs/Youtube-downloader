@@ -222,6 +222,45 @@ pub fn browser_name(b: Browser) -> &'static str {
     }
 }
 
+/// What the background check and install of a new app version report.
+pub enum AppUpdateEvent {
+    Available(String),
+    Installed(String),
+    Failed(String),
+}
+
+/// Looks for a newer release than this build; sends `Available` only if there is one.
+pub fn check_app_update(wake: impl Fn() + Send + 'static) -> Receiver<AppUpdateEvent> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || match ytdl_runner::self_update::latest_version() {
+        Ok(v) if ytdl_core::app_release::is_newer(&v, env!("CARGO_PKG_VERSION")) => {
+            let _ = tx.send(AppUpdateEvent::Available(v));
+            wake();
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("could not check for app updates: {e}"),
+    });
+    rx
+}
+
+/// Replaces the running AppImage with release `version`.
+pub fn install_app_update(
+    version: String,
+    appimage: PathBuf,
+    wake: impl Fn() + Send + 'static,
+) -> Receiver<AppUpdateEvent> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let event = match ytdl_runner::self_update::install_appimage(&version, &appimage) {
+            Ok(()) => AppUpdateEvent::Installed(version),
+            Err(e) => AppUpdateEvent::Failed(e.to_string()),
+        };
+        let _ = tx.send(event);
+        wake();
+    });
+    rx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

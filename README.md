@@ -30,6 +30,9 @@ A fast, native desktop app for downloading audio and video with
   browser (Chrome, Chromium, Brave, Firefox, Edge, Opera, Vivaldi or Safari).
 - **Nothing else to install.** yt-dlp, ffmpeg and ffprobe ship inside the package, and yt-dlp
   updates itself (checksum-verified) because YouTube changes often.
+- **Updates itself.** When a new version is out, a bar offers it at the top of the window. The
+  AppImage downloads it (checksum-verified) and replaces itself with one click; the .deb and macOS
+  versions link to the download. Turn it off in Settings.
 - **Shows the exact command** it runs, with a copy button, and a log for every download.
 - **History** of finished downloads, and a desktop notification when the queue is done.
 - **Dark and light themes**, or follow the system setting. Switch with the sun/moon button

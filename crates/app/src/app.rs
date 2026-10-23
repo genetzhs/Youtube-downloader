@@ -15,10 +15,21 @@ use ytdl_runner::{Downloader, Finished};
 
 use crate::icons::{self, Icon};
 use crate::paths;
-use crate::system::{self, ToolEvent, ToolStatus, browser_name};
+use crate::system::{self, AppUpdateEvent, ToolEvent, ToolStatus, browser_name};
 use crate::theme::{self, Weight, palette, radius};
 use crate::views::{self, Action, DetailsView, Fix, RowState, RowView, Stage};
 use crate::widgets::{self as w, Kind, Ring};
+
+/// A newer version of the app, from the check at start.
+enum AppUpdate {
+    None,
+    Available(String),
+    Installing(String),
+    /// The AppImage was replaced; a restart runs the new version.
+    Installed(String),
+    Failed(String, String),
+    Dismissed,
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -37,6 +48,8 @@ pub struct App {
     pub(crate) downloader: Downloader,
     pub(crate) tools: ToolStatus,
     tool_events: Option<Receiver<ToolEvent>>,
+    app_update: AppUpdate,
+    app_update_events: Option<Receiver<AppUpdateEvent>>,
     browsers: Vec<Browser>,
     selected: Option<ItemId>,
     /// Row under the pointer in the previous frame, so its background is
@@ -83,7 +96,13 @@ impl App {
             move || wake_ctx.request_repaint(),
         ));
 
+        let wake_ctx = ctx.clone();
+        let app_update_events = (config.check_app_updates && !demo)
+            .then(|| system::check_app_update(move || wake_ctx.request_repaint()));
+
         Self {
+            app_update: AppUpdate::None,
+            app_update_events,
             default_dirs: default_dirs(&paths::home(), cfg!(target_os = "macos")),
             config,
             config_path,
@@ -178,6 +197,80 @@ impl App {
                 }
             }
         }
+    }
+
+    fn poll_app_update(&mut self) {
+        let Some(rx) = &self.app_update_events else {
+            return;
+        };
+        for ev in rx.try_iter().collect::<Vec<_>>() {
+            self.app_update = match (ev, &self.app_update) {
+                (_, AppUpdate::Dismissed) => AppUpdate::Dismissed,
+                (AppUpdateEvent::Available(v), _) => AppUpdate::Available(v),
+                (AppUpdateEvent::Installed(v), _) => AppUpdate::Installed(v),
+                (AppUpdateEvent::Failed(e), AppUpdate::Installing(v)) => {
+                    AppUpdate::Failed(v.clone(), e)
+                }
+                (AppUpdateEvent::Failed(_), _) => AppUpdate::None,
+            };
+        }
+    }
+
+    /// The bar above the link field that offers a newer version.
+    fn app_update_bar(&mut self, ui: &mut egui::Ui) {
+        let (version, message) = match &self.app_update {
+            AppUpdate::None | AppUpdate::Dismissed => return,
+            AppUpdate::Available(v) => (v.clone(), format!("Version {v} is available")),
+            AppUpdate::Installing(v) => (v.clone(), format!("Downloading version {v}…")),
+            AppUpdate::Installed(v) => (v.clone(), format!("Version {v} is installed")),
+            AppUpdate::Failed(v, e) => (v.clone(), format!("Update to {v} failed: {e}")),
+        };
+        let p = palette(ui.ctx());
+        let appimage = ytdl_runner::self_update::running_appimage();
+        w::card(p.surface, p.border, radius::CARD)
+            .inner_margin(Margin::symmetric(16, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    w::text(ui, &message, 13.0, Weight::Medium, p.text);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if !matches!(self.app_update, AppUpdate::Installing(_))
+                            && w::icon_button(ui, Icon::Close, "Not now").clicked()
+                        {
+                            self.app_update = AppUpdate::Dismissed;
+                        }
+                        if matches!(self.app_update, AppUpdate::Installing(_)) {
+                            w::progress_ring(ui, Ring::Spinner, 20.0);
+                            return;
+                        }
+                        let installed = matches!(self.app_update, AppUpdate::Installed(_));
+                        let (label, icon) = match (&appimage, installed) {
+                            (Some(_), true) => ("Restart now", None),
+                            (Some(_), false) => ("Update", Some(Icon::Download)),
+                            (None, _) => ("Download", Some(Icon::Download)),
+                        };
+                        if !w::button(ui, Kind::Primary, icon, label, 32.0).clicked() {
+                            return;
+                        }
+                        match appimage {
+                            Some(path) if installed => restart(&path, ui.ctx()),
+                            Some(path) => {
+                                let ctx = self.ctx.clone();
+                                self.app_update_events = Some(system::install_app_update(
+                                    version.clone(),
+                                    path,
+                                    move || ctx.request_repaint(),
+                                ));
+                                self.app_update = AppUpdate::Installing(version.clone());
+                            }
+                            None => system::open(std::path::Path::new(
+                                ytdl_core::app_release::RELEASES_PAGE,
+                            )),
+                        }
+                    });
+                });
+            });
+        ui.add_space(16.0);
     }
 
     pub(crate) fn add_links(&mut self, text: &str) {
@@ -708,6 +801,7 @@ impl App {
     }
 
     fn downloads_page(&mut self, ui: &mut egui::Ui) {
+        self.app_update_bar(ui);
         self.add_section(ui);
         ui.add_space(24.0);
         let rows = self.rows();
@@ -871,6 +965,7 @@ fn toggle(current: Page, target: Page) -> Page {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_tools();
+        self.poll_app_update();
         let finished = self.downloader.tick();
         if !finished.is_empty() {
             self.on_finished(finished);
@@ -925,6 +1020,15 @@ impl eframe::App for App {
                     });
             });
         self.log_window(ctx);
+    }
+}
+
+/// Starts the updated AppImage and closes this window. Running downloads
+/// stop, so the button is only offered after the user asked to update.
+fn restart(appimage: &std::path::Path, ctx: &egui::Context) {
+    match std::process::Command::new(appimage).spawn() {
+        Ok(_) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Err(e) => eprintln!("could not start {}: {e}", appimage.display()),
     }
 }
 

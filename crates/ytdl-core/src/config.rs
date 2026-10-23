@@ -30,6 +30,8 @@ pub struct Config {
     pub theme: Theme,
     pub notify_when_done: bool,
     pub auto_update_ytdlp: bool,
+    /// Look for a newer version of this app when it starts.
+    pub check_app_updates: bool,
     /// Use this yt-dlp instead of the bundled or updated one.
     pub ytdlp_override: Option<PathBuf>,
     pub ffmpeg_override: Option<PathBuf>,
@@ -53,6 +55,7 @@ impl Default for Config {
             theme: Theme::System,
             notify_when_done: true,
             auto_update_ytdlp: true,
+            check_app_updates: true,
             ytdlp_override: None,
             ffmpeg_override: None,
         }
