@@ -203,10 +203,11 @@ packaging/linux/build-appimage.sh target/release/youtube-downloader packaging/bu
 packaging/macos/build-app.sh target/release/youtube-downloader packaging/build/macos-arm64 0.1.0 out.dmg
 ```
 
-To publish a release, set the version in `crates/app/Cargo.toml`, then push a matching tag
-(`git tag v0.1.0 && git push origin v0.1.0`). The **Release** workflow builds all packages and
-attaches them to a GitHub release. Running the workflow by hand builds the packages without
-publishing.
+To publish a release, set the version in `crates/app/Cargo.toml` and merge it to `main`. Then
+either push a matching tag (`git tag v0.1.1 && git push origin v0.1.1`), or open
+**Actions → Release → Run workflow** on `main` and enter the tag (`v0.1.1`) in *release*. Either
+way the workflow builds all packages and attaches them to a GitHub release. Running it by hand
+with *release* empty only builds the packages.
 
 ## License
 
