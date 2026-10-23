@@ -7,13 +7,15 @@ use std::time::Duration;
 
 use ytdl_core::app_release as release;
 
-use crate::update::{USER_AGENT, UpdateError, agent, get_text, tls};
+use crate::update::{USER_AGENT, UpdateError, agent, tls};
 
 /// The AppImage is ~120 MB with yt-dlp and ffmpeg inside.
 const MAX_DOWNLOAD: u64 = 600 * 1024 * 1024;
 
-/// The newest published version of the app, e.g. `0.1.4`.
-pub fn latest_version() -> Result<String, UpdateError> {
+/// Where GitHub redirects `url` to, without reading the redirect's body.
+/// GitHub sends some release redirects with a chunked body that the HTTP
+/// client fails to parse, so redirects are followed by hand.
+fn redirect_target(url: &str) -> Result<String, UpdateError> {
     let no_redirects = ureq::Agent::config_builder()
         .tls_config(tls())
         .timeout_global(Some(Duration::from_secs(30)))
@@ -22,14 +24,32 @@ pub fn latest_version() -> Result<String, UpdateError> {
         .build()
         .new_agent();
     let resp = no_redirects
-        .get(release::LATEST_CHECKSUMS_URL)
+        .get(url)
         .header("User-Agent", USER_AGENT)
         .call()?;
     resp.headers()
         .get("location")
         .and_then(|v| v.to_str().ok())
-        .and_then(release::version_from_redirect)
+        .map(str::to_string)
+        .ok_or_else(|| UpdateError::Http(format!("GitHub did not redirect {url}")))
+}
+
+/// The newest published version of the app, e.g. `0.1.4`.
+pub fn latest_version() -> Result<String, UpdateError> {
+    release::version_from_redirect(&redirect_target(release::LATEST_CHECKSUMS_URL)?)
         .ok_or_else(|| UpdateError::Http("GitHub did not report the latest version".into()))
+}
+
+/// Downloads a release file, following GitHub's redirect to its storage.
+fn download(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, UpdateError> {
+    Ok(agent
+        .get(&redirect_target(url)?)
+        .header("User-Agent", USER_AGENT)
+        .call()?
+        .body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()?)
 }
 
 /// The AppImage this process runs from, if any. The AppImage runtime sets
@@ -47,15 +67,9 @@ pub fn running_appimage() -> Option<PathBuf> {
 pub fn install_appimage(version: &str, target: &Path) -> Result<(), UpdateError> {
     let asset = release::appimage_name(version);
     let agent = agent();
-    let sums = get_text(&agent, &release::file_url(version, "SHA256SUMS"))?;
-    let bytes = agent
-        .get(&release::file_url(version, &asset))
-        .header("User-Agent", USER_AGENT)
-        .call()?
-        .body_mut()
-        .with_config()
-        .limit(MAX_DOWNLOAD)
-        .read_to_vec()?;
+    let sums = download(&agent, &release::file_url(version, "SHA256SUMS"), 64 * 1024)?;
+    let sums = String::from_utf8_lossy(&sums);
+    let bytes = download(&agent, &release::file_url(version, &asset), MAX_DOWNLOAD)?;
     replace_verified(&bytes, &sums, &asset, target)
 }
 

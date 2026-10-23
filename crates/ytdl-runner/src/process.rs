@@ -73,7 +73,7 @@ impl Runner {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = match cmd.spawn() {
+        let mut child = match spawn(&mut cmd) {
             Ok(c) => c,
             Err(e) => {
                 self.send(RunnerEvent::SpawnFailed {
@@ -141,10 +141,13 @@ impl Runner {
         let program: PathBuf = program.to_path_buf();
         let args = args.to_vec();
         thread::spawn(move || {
-            let json = command(&program)
-                .args(&args)
+            let mut cmd = command(&program);
+            cmd.args(&args)
                 .stdin(Stdio::null())
-                .output()
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let json = spawn(&mut cmd)
+                .and_then(|c| c.wait_with_output())
                 .ok()
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
@@ -175,6 +178,23 @@ impl Runner {
 
 /// A command whose output is unbuffered UTF-8 and which runs in its own
 /// process group, so cancelling also stops the ffmpeg children.
+/// Starts `cmd`, retrying briefly while the program file is still open for
+/// writing somewhere ("text file busy"). That happens right after yt-dlp is
+/// updated, when another thread forks while the new file is being written.
+fn spawn(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    const ETXTBSY: i32 = 26;
+    let mut tries = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if cfg!(unix) && e.raw_os_error() == Some(ETXTBSY) && tries < 20 => {
+                tries += 1;
+                thread::sleep(std::time::Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+}
+
 fn command(program: &Path) -> Command {
     let mut cmd = Command::new(program);
     cmd.env("PYTHONUNBUFFERED", "1")
